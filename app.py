@@ -1,23 +1,24 @@
-import yfinance as yf
-import pandas as pd
+import streamlit as st
+from data import get_data
 
-def get_data(symbol="BBCA.JK", interval="5m"):
-    df = yf.download(
-        symbol,
-        interval=interval,
-        period="5d",
-        progress=False
-    )
+st.title("Robot Saham Indonesia")
 
-    if df is None or df.empty:
-        return pd.DataFrame()
+symbol = st.text_input("Kode Saham", "BBCA.JK")
 
-    df = df.reset_index()
+timeframe = st.selectbox(
+    "Timeframe",
+    ["5m","15m","30m","60m","1d"]
+)
 
-    # flatten kalau multi column
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ['_'.join(col).lower() for col in df.columns]
-    else:
-        df.columns = [str(c).lower() for c in df.columns]
+st.write("DEBUG: sebelum ambil data")
 
-    return df
+df = get_data(symbol, timeframe)
+
+st.write("DEBUG: setelah ambil data")
+
+st.write("Dataframe shape:", df.shape)
+
+st.write("Columns:", df.columns)
+
+if not df.empty:
+    st.write(df.tail())
