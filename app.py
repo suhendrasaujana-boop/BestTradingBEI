@@ -1,6 +1,19 @@
-AttributeError: This app has encountered an error. The original error message is redacted to prevent data leaks. Full error details have been recorded in the logs (if you're on Streamlit Cloud, click on 'Manage app' in the lower right of your app).
-Traceback:
-File "/mount/src/besttradingbei/app.py", line 13, in <module>
-    df = get_data(symbol, timeframe)
-File "/mount/src/besttradingbei/data.py", line 12, in get_data
-    df.columns = [c.lower() for c in df.columns]
+import streamlit as st
+from data import get_data
+
+st.title("Robot Saham Indonesia")
+
+symbol = st.text_input("Kode Saham", "BBCA.JK")
+
+timeframe = st.selectbox(
+    "Timeframe",
+    ["1m","5m","15m","30m","60m","1d"]
+)
+
+df = get_data(symbol, timeframe)
+
+if df.empty:
+    st.warning("Data tidak tersedia untuk timeframe ini")
+else:
+    st.line_chart(df['close'])
+    st.write(df.tail())
