@@ -14,7 +14,10 @@ def get_data(symbol="BBCA.JK", interval="5m"):
 
     df = df.reset_index()
 
-    # rename aman
-    df.columns = [str(c).lower() for c in df.columns]
+    # flatten kalau multi column
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).lower() for col in df.columns]
+    else:
+        df.columns = [str(c).lower() for c in df.columns]
 
     return df
