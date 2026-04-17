@@ -13,7 +13,7 @@ from data import (
     get_trading_recommendation
 )
 
-# Konfigurasi halaman (Wajib di awal)
+# Konfigurasi halaman
 st.set_page_config(
     page_title="Robot Saham Indonesia",
     page_icon="📈",
@@ -21,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS untuk tampilan lebih rapi
+# Custom CSS
 st.markdown("""
 <style>
     .stMetric {
@@ -38,12 +38,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Title di sidebar
+# Sidebar
 with st.sidebar:
     st.title("📈 Robot Saham Indonesia")
     st.markdown("---")
     
-    # Input di sidebar
     symbol = st.text_input("📊 Kode Saham", "BBCA.JK", key="symbol_input").upper()
     
     timeframe = st.selectbox(
@@ -54,7 +53,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Auto refresh
     auto_refresh = st.checkbox("🔄 Auto Refresh (setiap 30 detik)", value=False)
     if auto_refresh:
         time.sleep(30)
@@ -63,13 +61,11 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
 
-# Main content area
+# Main content
 st.title(f"📊 Analisis {symbol}")
 
-# Layout 2 kolom untuk chart dan sinyal utama
 col1, col2 = st.columns([2, 1])
 
-# Ambil data
 df = get_data(symbol, timeframe)
 
 if df.empty:
@@ -84,7 +80,6 @@ with col1:
     st.subheader("📈 Harga & Indikator")
     st.line_chart(df[['close', 'ema20', 'ema50']])
     
-    # Tampilkan indikator tambahan dalam expander
     with st.expander("📊 Detail Indikator"):
         last = df.iloc[-1]
         col_rsi, col_macd, col_vol = st.columns(3)
@@ -104,7 +99,6 @@ with col1:
 with col2:
     st.subheader("🎯 Sinyal Trading")
     
-    # Card sinyal dengan warna
     st.markdown(f"""
     <div style="background-color:{signal_color if signal_color != 'green' else '#90EE90'}; 
                 padding:15px; border-radius:10px; text-align:center">
@@ -116,12 +110,10 @@ with col2:
     
     st.markdown("---")
     
-    # Rekomendasi trading
     st.subheader("📝 Rekomendasi")
     rekomendasi = get_trading_recommendation(score, df)
     st.markdown(rekomendasi)
     
-    # Tombol copy rekomendasi
     st.code(rekomendasi, language="text")
     st.caption("📋 Klik kanan pada teks di atas → Copy")
 
@@ -133,7 +125,6 @@ mtf = multi_timeframe_analysis(symbol)
 avg_score = mtf.get('weighted', 0)
 final_label, final_color, final_emoji = get_signal_label(avg_score)
 
-# Tampilkan MTF dalam grid
 cols = st.columns(5)
 timeframe_names = ["5m", "15m", "30m", "1h", "1d"]
 for idx, (name, col) in enumerate(zip(timeframe_names, cols)):
@@ -155,31 +146,33 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Scanner Saham
+# Scanner Saham - DIPERBAIKI
 st.markdown("---")
 st.subheader("🔍 Scanner Saham Terbaik")
 
 if st.button("🚀 Scan Market Sekarang", use_container_width=True):
-    with st.spinner("Scanning market..."):
-        results = scan_saham()
-        df_scan = pd.DataFrame(results)
-        
-        # Warna berdasarkan sinyal
-        def color_signal(val):
-            if "BUY" in str(val):
-                return "background-color: #90EE90"
-            elif "SELL" in str(val):
-                return "background-color: #FFCCCC"
-            return ""
-        
-        st.dataframe(
-            df_scan.style.applymap(color_signal, subset=['Sinyal']),
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Rekomendasi top 3
-        st.success(f"🏆 Top 3: {', '.join([r['Kode'] for r in results[:3]])}")
+    with st.spinner("Scanning market (mohon tunggu 30-60 detik)..."):
+        try:
+            results = scan_saham()
+            if results:
+                df_scan = pd.DataFrame(results)
+                
+                # PERBAIKAN: applymap diganti dengan map
+                def color_signal(val):
+                    if "BUY" in str(val):
+                        return "background-color: #90EE90"
+                    elif "SELL" in str(val):
+                        return "background-color: #FFCCCC"
+                    return ""
+                
+                styled_df = df_scan.style.map(color_signal, subset=['Sinyal'])
+                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                st.success(f"🏆 Top 3: {', '.join([r['Kode'] for r in results[:3]])}")
+            else:
+                st.warning("Tidak ada data yang ditemukan")
+        except Exception as e:
+            st.error(f"Error saat scan: {str(e)}")
+            st.info("Coba lagi nanti")
 
 # Footer
 st.markdown("---")
