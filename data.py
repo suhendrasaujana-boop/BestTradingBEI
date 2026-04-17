@@ -39,3 +39,28 @@ def add_indicators(df):
     df['rsi'] = 100 - (100 / (1 + rs))
 
     return df
+# MACD
+exp1 = df['close'].ewm(span=12).mean()
+exp2 = df['close'].ewm(span=26).mean()
+df['macd'] = exp1 - exp2
+df['macd_signal'] = df['macd'].ewm(span=9).mean()
+def calculate_score(df):
+    score = 0
+
+    # EMA trend
+    if df['ema20'].iloc[-1] > df['ema50'].iloc[-1]:
+        score += 25
+
+    # RSI
+    if df['rsi'].iloc[-1] > 50:
+        score += 25
+
+    # MACD
+    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1]:
+        score += 25
+
+    # Momentum tambahan
+    if df['close'].iloc[-1] > df['ema20'].iloc[-1]:
+        score += 25
+
+    return score
