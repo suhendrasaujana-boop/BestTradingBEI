@@ -1,5 +1,13 @@
 import streamlit as st
-from data import get_data, add_indicators
+import pandas as pd
+
+from data import (
+    get_data,
+    add_indicators,
+    calculate_score,
+    multi_timeframe_analysis,
+    scan_saham
+)
 
 st.title("Robot Saham Indonesia")
 
@@ -17,29 +25,29 @@ if df.empty:
     st.warning("Data kosong")
 else:
     df = add_indicators(df)
+
     st.line_chart(df[['close','ema20','ema50']])
-    st.write(df.tail())
-from data import get_data, add_indicators, calculate_score
-df = add_indicators(df)
-score = calculate_score(df)
 
-if score >= 80:
-    signal = "STRONG BUY"
-elif score >= 60:
-    signal = "BUY"
-elif score >= 40:
-    signal = "WAIT"
-else:
-    signal = "SELL"
+    score = calculate_score(df)
 
-st.metric("Score", score)
-st.metric("Signal", signal)
-from data import multi_timeframe_analysis
+    if score >= 80:
+        signal = "STRONG BUY"
+    elif score >= 60:
+        signal = "BUY"
+    elif score >= 40:
+        signal = "WAIT"
+    else:
+        signal = "SELL"
+
+    st.metric("Score", score)
+    st.metric("Signal", signal)
+
+# Multi timeframe
 st.subheader("Multi Timeframe Analysis")
 
 mtf = multi_timeframe_analysis(symbol)
-
 st.write(mtf)
+
 avg_score = sum(mtf.values()) / len(mtf)
 
 if avg_score >= 80:
@@ -53,3 +61,11 @@ else:
 
 st.metric("Final Score", round(avg_score,2))
 st.metric("Final Signal", final_signal)
+
+# Scanner saham
+st.subheader("Scanner Saham Terbaik")
+
+if st.button("Scan Market"):
+    results = scan_saham()
+    df_scan = pd.DataFrame(results)
+    st.dataframe(df_scan)
