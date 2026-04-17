@@ -56,3 +56,28 @@ def calculate_score(df):
         score += 25
 
     return score
+def multi_timeframe_analysis(symbol):
+
+    timeframes = {
+        "5m": "5m",
+        "15m": "15m",
+        "30m": "30m",
+        "1h": "60m",
+        "1d": "1d"
+    }
+
+    results = {}
+
+    for label, tf in timeframes.items():
+        df = get_data(symbol, tf)
+
+        if df.empty:
+            results[label] = 0
+            continue
+
+        df = add_indicators(df)
+        score = calculate_score(df)
+
+        results[label] = score
+
+    return results
