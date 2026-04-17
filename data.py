@@ -12,12 +12,17 @@ def get_data(symbol="BBCA.JK", interval="5m"):
     if df is None or df.empty:
         return pd.DataFrame()
 
+    # reset index
     df = df.reset_index()
 
-    # flatten kalau multi column
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ['_'.join(col).lower() for col in df.columns]
-    else:
-        df.columns = [str(c).lower() for c in df.columns]
+    # paksa rename manual
+    df.columns = [
+        "datetime",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+    ]
 
     return df
