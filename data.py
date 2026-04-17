@@ -81,3 +81,29 @@ def multi_timeframe_analysis(symbol):
         results[label] = score
 
     return results
+def scan_saham():
+
+    saham_list = [
+        "BBCA.JK",
+        "BBRI.JK",
+        "BMRI.JK",
+        "TLKM.JK",
+        "ASII.JK",
+        "ANTM.JK",
+        "MDKA.JK",
+        "GOTO.JK",
+        "BRPT.JK"
+    ]
+
+    results = []
+
+    for saham in saham_list:
+        mtf = multi_timeframe_analysis(saham)
+        avg_score = sum(mtf.values()) / len(mtf)
+
+        results.append({
+            "saham": saham,
+            "score": round(avg_score,2)
+        })
+
+    return sorted(results, key=lambda x: x['score'], reverse=True)
