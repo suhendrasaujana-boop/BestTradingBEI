@@ -1,19 +1,23 @@
-import streamlit as st
-from data import get_data
+import yfinance as yf
+import pandas as pd
 
-st.title("Robot Saham Indonesia")
+def get_data(symbol="BBCA.JK", interval="5m"):
+    df = yf.download(
+        symbol,
+        interval=interval,
+        period="5d",
+        progress=False
+    )
 
-symbol = st.text_input("Kode Saham", "BBCA.JK")
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-timeframe = st.selectbox(
-    "Timeframe",
-    ["1m","5m","15m","30m","60m","1d"]
-)
+    df = df.reset_index()
 
-df = get_data(symbol, timeframe)
+    # flatten kalau multi column
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).lower() for col in df.columns]
+    else:
+        df.columns = [str(c).lower() for c in df.columns]
 
-if df.empty:
-    st.warning("Data tidak tersedia untuk timeframe ini")
-else:
-    st.line_chart(df['close'])
-    st.write(df.tail())
+    return df
