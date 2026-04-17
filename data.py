@@ -107,3 +107,9 @@ def scan_saham():
         })
 
     return sorted(results, key=lambda x: x['score'], reverse=True)
+from data import scan_saham
+st.subheader("Scanner Saham Terbaik")
+
+if st.button("Scan Market"):
+    results = scan_saham()
+    st.write(results)
