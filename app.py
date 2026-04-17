@@ -19,3 +19,18 @@ else:
     df = add_indicators(df)
     st.line_chart(df[['close','ema20','ema50']])
     st.write(df.tail())
+from data import get_data, add_indicators, calculate_score
+df = add_indicators(df)
+score = calculate_score(df)
+
+if score >= 80:
+    signal = "STRONG BUY"
+elif score >= 60:
+    signal = "BUY"
+elif score >= 40:
+    signal = "WAIT"
+else:
+    signal = "SELL"
+
+st.metric("Score", score)
+st.metric("Signal", signal)
