@@ -34,3 +34,22 @@ else:
 
 st.metric("Score", score)
 st.metric("Signal", signal)
+from data import multi_timeframe_analysis
+st.subheader("Multi Timeframe Analysis")
+
+mtf = multi_timeframe_analysis(symbol)
+
+st.write(mtf)
+avg_score = sum(mtf.values()) / len(mtf)
+
+if avg_score >= 80:
+    final_signal = "STRONG BUY"
+elif avg_score >= 60:
+    final_signal = "BUY"
+elif avg_score >= 40:
+    final_signal = "WAIT"
+else:
+    final_signal = "SELL"
+
+st.metric("Final Score", round(avg_score,2))
+st.metric("Final Signal", final_signal)
