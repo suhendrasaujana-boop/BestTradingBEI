@@ -10,15 +10,10 @@ timeframe = st.selectbox(
     ["5m","15m","30m","60m","1d"]
 )
 
-st.write("DEBUG: sebelum ambil data")
-
 df = get_data(symbol, timeframe)
 
-st.write("DEBUG: setelah ambil data")
-
-st.write("Dataframe shape:", df.shape)
-
-st.write("Columns:", df.columns)
-
-if not df.empty:
+if df.empty:
+    st.warning("Data kosong")
+else:
+    st.line_chart(df['close'])
     st.write(df.tail())
