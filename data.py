@@ -69,7 +69,7 @@ def add_indicators(df):
     df['resistance'] = df['high'].rolling(window=20).max()
     df['support'] = df['low'].rolling(window=20).min()
     
-    # ========== FITUR BARU: BREAKOUT DETECTOR ==========
+    # ========== BREAKOUT DETECTOR ==========
     df['breakout_high'] = df['close'] > df['high'].rolling(20).max().shift(1)
     df['breakout_low'] = df['close'] < df['low'].rolling(20).min().shift(1)
     
@@ -132,9 +132,9 @@ def calculate_score(df):
     # ========== 3. RSI (DENGAN KONFIRMASI TREND) ==========
     if last['rsi'] < 30:  # Oversold
         if is_uptrend:
-            score += 8  # Hanya +8 jika uptrend
+            score += 8
         else:
-            score += 2  # +2 saja jika downtrend (hindari falling knife)
+            score += 2
     elif last['rsi'] > 70:  # Overbought
         score -= 10
     elif last['rsi'] > 50:
@@ -146,9 +146,9 @@ def calculate_score(df):
     if last['macd_histogram'] > 0:
         score += 5
         
-    # ========== 5. BOLLINGER BANDS (DENGAN KONFIRMASI RSI) ==========
+    # ========== 5. BOLLINGER BANDS ==========
     if last['close'] <= last['bb_lower']:
-        if last['rsi'] > 30:  # Hindari breakdown
+        if last['rsi'] > 30:
             score += 6
     elif last['close'] >= last['bb_upper']:
         score -= 10
@@ -159,14 +159,14 @@ def calculate_score(df):
     volume_surge = last['volume'] > last['volume_ma20'] * 1.2
     volume_price_up = last['close'] > prev['close'] and last['volume'] > prev['volume']
     
-    # ========== 7. BREAKOUT DETECTOR (FITUR BARU) ==========
+    # ========== 7. BREAKOUT DETECTOR ==========
     breakout_high = last['breakout_high'] if 'breakout_high' in last else False
     breakout_low = last['breakout_low'] if 'breakout_low' in last else False
     
     if volume_surge and breakout_high:
-        score += 15  # Breakout dengan volume tinggi
+        score += 15
     elif volume_surge and breakout_low:
-        score -= 15  # Breakdown dengan volume tinggi
+        score -= 15
     elif volume_surge:
         score += 12
     else:
@@ -175,7 +175,14 @@ def calculate_score(df):
     if volume_price_up:
         score += 5
         
-    # ========== 8. SUPPORT/RESISTANCE ==========
+    # ========== 8. FALSE BREAKOUT FILTER (FITUR BARU) ==========
+    if breakout_high and last['close'] < last['ema20']:
+        score -= 12  # breakout tapi masih di bawah EMA20 = fake
+    
+    if breakout_low and last['close'] > last['ema20']:
+        score += 5   # fake breakdown (bullish)
+    
+    # ========== 9. SUPPORT/RESISTANCE ==========
     if last['close'] <= last['support'] * 1.02:
         score += 12
     elif last['close'] >= last['resistance'] * 0.98:
@@ -183,35 +190,47 @@ def calculate_score(df):
     else:
         score += 3
     
-    # ========== 9. ADX DENGAN CEK ARAH TREND ==========
+    # ========== 10. VOLATILITY FILTER (FITUR BARU) ==========
+    volatility = last['atr'] / last['close']
+    if volatility < 0.005:  # Terlalu sepi
+        score -= 10
+    elif volatility > 0.03:  # Terlalu liar
+        score -= 5
+    
+    # ========== 11. ADX DENGAN CEK ARAH TREND ==========
     if not pd.isna(last['adx']):
         if last['adx'] >= 25:
             if is_uptrend:
-                score += 15  # Tren naik kuat
+                score += 15
             else:
-                score -= 10  # Tren turun kuat
+                score -= 10
         elif last['adx'] >= 20:
             if is_uptrend:
                 score += 8
             else:
                 score -= 5
         elif last['adx'] < 18:
-            score -= 15  # Tren lemah
+            score -= 15
     
-    # ========== 10. STOCHASTIC RSI ==========
+    # ========== 12. STRONG TREND BONUS (FITUR BARU) ==========
+    if not pd.isna(last['adx']):
+        if last['adx'] > 30 and is_uptrend and last['close'] > last['ema20']:
+            score += 10  # Strong trend = akselerasi BUY
+    
+    # ========== 13. STOCHASTIC RSI ==========
     if not pd.isna(last['stoch_rsi_k']):
         if last['stoch_rsi_k'] < 20 and is_uptrend:
             score += 8
         elif last['stoch_rsi_k'] > 80:
             score -= 8
     
-    # ========== 11. SELL PROTECTION ==========
+    # ========== 14. SELL PROTECTION ==========
     if last['close'] < last['ema50']:
-        score -= 15  # Harga di bawah EMA50, hati-hati
+        score -= 15
     
-    # ========== 12. TREND DIRECTION RULE ==========
+    # ========== 15. TREND DIRECTION RULE ==========
     if not is_uptrend and score > 50:
-        score = 50  # Tidak boleh BUY di downtrend
+        score = 50
     
     return min(100, max(0, score))
 
@@ -251,7 +270,6 @@ def multi_timeframe_analysis(symbol):
         "1d": "1d"
     }
     
-    # Bobot baru: 5m dihilangkan untuk mengurangi noise
     weights = {
         "15m": 0.15,
         "30m": 0.25,
@@ -339,7 +357,7 @@ def get_trading_recommendation(score, df):
         else:
             adx_text = f"⚠️ ADX: {last['adx']:.1f} (Tren Lemah)"
     
-    if score >= 60:  # BUY
+    if score >= 60:
         entry = harga
         stop_loss = harga - (atr * 1.5)
         target1 = harga + (atr * 1.5)
@@ -357,7 +375,7 @@ def get_trading_recommendation(score, df):
 🚧 **Resistance:** Rp{resistance:,.0f} (harga tertinggi)
 """
     
-    elif score <= 35:  # SELL
+    elif score <= 35:
         entry = harga
         stop_loss = harga + (atr * 1.5)
         target1 = harga - (atr * 1.5)
