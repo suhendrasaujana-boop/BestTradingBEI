@@ -13,7 +13,6 @@ from data import (
     get_trading_recommendation
 )
 
-# Konfigurasi halaman
 st.set_page_config(
     page_title="Robot Saham Indonesia",
     page_icon="📈",
@@ -21,47 +20,27 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
 st.markdown("""
 <style>
-    .stMetric {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 10px;
-    }
-    div[data-testid="stHorizontalBlock"] {
-        gap: 1rem;
-    }
-    .stButton button {
-        width: 100%;
-    }
+    .stMetric { background-color: #f0f2f6; border-radius: 10px; padding: 10px; }
+    div[data-testid="stHorizontalBlock"] { gap: 1rem; }
+    .stButton button { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar
 with st.sidebar:
     st.title("📈 Robot Saham Indonesia")
     st.markdown("---")
-    
     symbol = st.text_input("📊 Kode Saham", "BBCA.JK", key="symbol_input").upper()
-    
-    timeframe = st.selectbox(
-        "⏱️ Timeframe",
-        ["5m", "15m", "30m", "60m", "1d"],
-        key="timeframe_select"
-    )
-    
+    timeframe = st.selectbox("⏱️ Timeframe", ["5m", "15m", "30m", "60m", "1d"], key="timeframe_select")
     st.markdown("---")
-    
     auto_refresh = st.checkbox("🔄 Auto Refresh (setiap 30 detik)", value=False)
     if auto_refresh:
         time.sleep(30)
         st.rerun()
-    
     st.markdown("---")
     st.caption(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
 
-# Main content
 st.title(f"📊 Analisis {symbol}")
 
 col1, col2 = st.columns([2, 1])
@@ -79,7 +58,6 @@ signal_label, signal_color, signal_emoji = get_signal_label(score)
 with col1:
     st.subheader("📈 Harga & Indikator")
     st.line_chart(df[['close', 'ema20', 'ema50']])
-    
     with st.expander("📊 Detail Indikator"):
         last = df.iloc[-1]
         col_rsi, col_macd, col_vol = st.columns(3)
@@ -98,7 +76,6 @@ with col1:
 
 with col2:
     st.subheader("🎯 Sinyal Trading")
-    
     st.markdown(f"""
     <div style="background-color:{signal_color if signal_color != 'green' else '#90EE90'}; 
                 padding:15px; border-radius:10px; text-align:center">
@@ -107,17 +84,21 @@ with col2:
         <p style="margin:0">/ 100</p>
     </div>
     """, unsafe_allow_html=True)
-    
     st.markdown("---")
-    
     st.subheader("📝 Rekomendasi")
     rekomendasi = get_trading_recommendation(score, df)
     st.markdown(rekomendasi)
     
-    st.code(rekomendasi, language="text")
-    st.caption("📋 Klik kanan pada teks di atas → Copy")
+    if not df.empty:
+        last = df.iloc[-1]
+        st.markdown("---")
+        st.subheader("📊 Support & Resistance")
+        col_sup, col_res = st.columns(2)
+        with col_sup:
+            st.metric("🛡️ Support", f"Rp{last['support']:,.0f}")
+        with col_res:
+            st.metric("🚧 Resistance", f"Rp{last['resistance']:,.0f}")
 
-# Multi Timeframe Analysis
 st.markdown("---")
 st.subheader("⏰ Multi Timeframe Analysis")
 
@@ -146,7 +127,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Scanner Saham - DIPERBAIKI
 st.markdown("---")
 st.subheader("🔍 Scanner Saham Terbaik")
 
@@ -156,15 +136,12 @@ if st.button("🚀 Scan Market Sekarang", use_container_width=True):
             results = scan_saham()
             if results:
                 df_scan = pd.DataFrame(results)
-                
-                # PERBAIKAN: applymap diganti dengan map
                 def color_signal(val):
                     if "BUY" in str(val):
                         return "background-color: #90EE90"
                     elif "SELL" in str(val):
                         return "background-color: #FFCCCC"
                     return ""
-                
                 styled_df = df_scan.style.map(color_signal, subset=['Sinyal'])
                 st.dataframe(styled_df, use_container_width=True, hide_index=True)
                 st.success(f"🏆 Top 3: {', '.join([r['Kode'] for r in results[:3]])}")
@@ -174,6 +151,5 @@ if st.button("🚀 Scan Market Sekarang", use_container_width=True):
             st.error(f"Error saat scan: {str(e)}")
             st.info("Coba lagi nanti")
 
-# Footer
 st.markdown("---")
 st.caption("⚠️ Disclaimer: Ini hanya alat bantu analisis. Bukan rekomendasi investasi. Trading ada risiko.")
