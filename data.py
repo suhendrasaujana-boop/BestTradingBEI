@@ -6,9 +6,9 @@ def get_data(symbol="BBCA.JK", interval="5m"):
     """Ambil data dari Yahoo Finance"""
     try:
         if interval in ["5m", "15m", "30m"]:
-            period = "5d"
+            period = "7d"
         elif interval == "60m":
-            period = "1mo"
+            period = "5d"
         else:
             period = "3mo"
             
@@ -27,7 +27,7 @@ def get_data(symbol="BBCA.JK", interval="5m"):
 
 
 def add_indicators(df):
-    """Tambah indikator lengkap"""
+    """Tambah indikator lengkap + ADX + Stochastic RSI"""
     if df.empty:
         return df
     
@@ -62,6 +62,33 @@ def add_indicators(df):
     df['resistance'] = df['high'].rolling(window=20).max()
     df['support'] = df['low'].rolling(window=20).min()
     
+    # ADX
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
+    minus_dm = abs(minus_dm)
+    
+    atr_period = 14
+    tr_adx = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+    atr_adx = tr_adx.rolling(window=atr_period).mean()
+    
+    plus_di = 100 * (plus_dm.ewm(span=atr_period).mean() / atr_adx)
+    minus_di = abs(100 * (minus_dm.ewm(span=atr_period).mean() / atr_adx))
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    df['adx'] = dx.rolling(window=atr_period).mean()
+    
+    # Stochastic RSI
+    rsi = df['rsi']
+    stoch_rsi = (rsi - rsi.rolling(14).min()) / (rsi.rolling(14).max() - rsi.rolling(14).min())
+    df['stoch_rsi'] = stoch_rsi * 100
+    df['stoch_rsi_k'] = df['stoch_rsi'].rolling(3).mean()
+    df['stoch_rsi_d'] = df['stoch_rsi_k'].rolling(3).mean()
+    
     return df
 
 
@@ -75,16 +102,16 @@ def calculate_score(df):
     prev = df.iloc[-2] if len(df) > 1 else last
     
     if last['ema20'] > last['ema50']:
-        score += 15
+        score += 10
     if last['close'] > last['ema20']:
         score += 5
         
     if last['rsi'] < 30:
-        score += 20
+        score += 25
     elif last['rsi'] > 70:
         score += 0
     elif last['rsi'] > 50:
-        score += 10
+        score += 12
         
     if last['macd'] > last['macd_signal']:
         score += 15
@@ -92,16 +119,16 @@ def calculate_score(df):
         score += 5
         
     if last['close'] <= last['bb_lower']:
-        score += 15
+        score += 10
     elif last['close'] >= last['bb_upper']:
         score += 0
     elif last['close'] > last['bb_middle']:
-        score += 8
+        score += 5
         
     if last['volume'] > last['volume_ma20'] * 1.2:
-        score += 10
+        score += 12
     if last['close'] > prev['close'] and last['volume'] > prev['volume']:
-        score += 5
+        score += 8
         
     if last['close'] <= last['support'] * 1.02:
         score += 10
@@ -109,7 +136,24 @@ def calculate_score(df):
         score += 0
     else:
         score += 5
-        
+    
+    if not pd.isna(last['adx']):
+        if last['adx'] >= 25:
+            score += 10
+        elif last['adx'] >= 20:
+            score += 5
+    
+    if not pd.isna(last['stoch_rsi_k']):
+        if last['stoch_rsi_k'] < 20:
+            score += 10
+        elif last['stoch_rsi_k'] > 80:
+            score += 0
+        elif last['stoch_rsi_k'] > 50:
+            score += 5
+    
+    if last['volume'] < last['volume_ma20'] * 0.8:
+        score -= 15
+    
     return min(100, max(0, score))
 
 
@@ -127,8 +171,20 @@ def get_signal_label(score):
         return "🔴 STRONG SELL", "red", "🔴"
 
 
+def get_confidence_level(score):
+    """Hitung level keyakinan sinyal (FITUR BARU)"""
+    if score >= 80:
+        return "🔥 HIGH CONFIDENCE", "green"
+    elif score >= 60:
+        return "✅ MEDIUM CONFIDENCE", "lightgreen"
+    elif score >= 40:
+        return "⚠️ LOW CONFIDENCE", "orange"
+    else:
+        return "❌ VERY LOW CONFIDENCE", "red"
+
+
 def multi_timeframe_analysis(symbol):
-    """Analisis multi timeframe dengan bobot berbeda"""
+    """Analisis multi timeframe dengan bobot baru"""
     timeframes = {
         "5m": "5m",
         "15m": "15m", 
@@ -138,11 +194,11 @@ def multi_timeframe_analysis(symbol):
     }
     
     weights = {
-        "5m": 0.10,
-        "15m": 0.15,
+        "5m": 0.05,
+        "15m": 0.10,
         "30m": 0.20,
-        "1h": 0.25,
-        "1d": 0.30
+        "1h": 0.30,
+        "1d": 0.35
     }
     
     results = {}
@@ -158,6 +214,18 @@ def multi_timeframe_analysis(symbol):
         score = calculate_score(df)
         results[label] = score
         weighted_score += score * weights[label]
+    
+    results['weighted'] = round(weighted_score, 2)
+    
+    daily_score = results.get("1d", 0)
+    
+    if weighted_score >= 60 and daily_score < 40:
+        weighted_score = weighted_score * 0.7
+        results['filtered'] = True
+        results['filter_message'] = "⚠️ Daily masih SELL, skor dikurangi 30%"
+    else:
+        results['filtered'] = False
+        results['filter_message'] = ""
     
     results['weighted'] = round(weighted_score, 2)
     return results
@@ -194,7 +262,7 @@ def scan_saham():
 
 
 def get_trading_recommendation(score, df):
-    """Buat rekomendasi trading lengkap dengan Support & Resistance"""
+    """Buat rekomendasi trading lengkap"""
     if df.empty:
         return "Tidak ada data"
     
@@ -202,6 +270,15 @@ def get_trading_recommendation(score, df):
     support = last['support']
     resistance = last['resistance']
     atr = last['atr'] if last['atr'] > 0 else last['close'] * 0.02
+    
+    adx_text = ""
+    if 'adx' in last and not pd.isna(last['adx']):
+        if last['adx'] >= 25:
+            adx_text = f"\n📊 **ADX:** {last['adx']:.1f} (Tren Kuat ✅)"
+        elif last['adx'] >= 20:
+            adx_text = f"\n📊 **ADX:** {last['adx']:.1f} (Tren Mulai)"
+        else:
+            adx_text = f"\n📊 **ADX:** {last['adx']:.1f} (Tren Lemah ⚠️)"
     
     if score >= 60:
         entry = last['close']
@@ -213,7 +290,7 @@ def get_trading_recommendation(score, df):
 💰 **Entry:** Rp{entry:,.0f}
 🛑 **Stop Loss:** Rp{stop_loss:,.0f}
 🎯 **Target 1:** Rp{target1:,.0f}
-🎯 **Target 2:** Rp{target2:,.0f}
+🎯 **Target 2:** Rp{target2:,.0f}{adx_text}
 ━━━━━━━━━━━━━━━━━━━━
 🛡️ **Support:** Rp{support:,.0f}
 🚧 **Resistance:** Rp{resistance:,.0f}"""
@@ -228,7 +305,7 @@ def get_trading_recommendation(score, df):
 💰 **Entry:** Rp{entry:,.0f}
 🛑 **Stop Loss:** Rp{stop_loss:,.0f}
 🎯 **Target 1:** Rp{target1:,.0f}
-🎯 **Target 2:** Rp{target2:,.0f}
+🎯 **Target 2:** Rp{target2:,.0f}{adx_text}
 ━━━━━━━━━━━━━━━━━━━━
 🛡️ **Support:** Rp{support:,.0f}
 🚧 **Resistance:** Rp{resistance:,.0f}"""
@@ -236,10 +313,8 @@ def get_trading_recommendation(score, df):
     else:
         return f"""⏳ **REKOMENDASI WAIT/HOLD**
 ━━━━━━━━━━━━━━━━━━━━
-📊 **Harga saat ini:** Rp{last['close']:,.0f}
+📊 **Harga saat ini:** Rp{last['close']:,.0f}{adx_text}
 ━━━━━━━━━━━━━━━━━━━━
 🛡️ **Support:** Rp{support:,.0f}
 🚧 **Resistance:** Rp{resistance:,.0f}
-💡 **Saran:** Tunggu konfirmasi lebih lanjut
-   (Harga mendekati Support → potensi BUY)
-   (Harga mendekati Resistance → potensi SELL)"""
+💡 **Saran:** Tunggu konfirmasi lebih lanjut"""
