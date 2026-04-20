@@ -27,7 +27,7 @@ def get_data(symbol="BBCA.JK", interval="5m"):
 
 
 def add_indicators(df):
-    """Tambah indikator lengkap + ADX + Stochastic RSI"""
+    """Tambah indikator lengkap + ADX + Stochastic RSI + Breakout Detector"""
     if df.empty:
         return df
     
@@ -69,6 +69,10 @@ def add_indicators(df):
     df['resistance'] = df['high'].rolling(window=20).max()
     df['support'] = df['low'].rolling(window=20).min()
     
+    # ========== FITUR BARU: BREAKOUT DETECTOR ==========
+    df['breakout_high'] = df['close'] > df['high'].rolling(20).max().shift(1)
+    df['breakout_low'] = df['close'] < df['low'].rolling(20).min().shift(1)
+    
     # ADX
     high = df['high']
     low = df['low']
@@ -100,7 +104,7 @@ def add_indicators(df):
 
 
 def calculate_score(df):
-    """Hitung skor sinyal (0-100) dengan optimasi akurasi"""
+    """Hitung skor sinyal (0-100) dengan optimasi akurasi maksimal"""
     if df.empty or len(df) < 50:
         return 0
     
@@ -108,54 +112,70 @@ def calculate_score(df):
     last = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else last
     
-    # ========== 1. TREND MASTER FILTER (WAJIB) ==========
+    # ========== 1. TREND MASTER FILTER ==========
     is_uptrend = last['ema20'] > last['ema50']
     is_price_above_ema = last['close'] > last['ema20']
     
+    # ========== 2. TREND STRENGTH FILTER (SIDEWAYS PENALTY) ==========
+    trend_strength = abs(last['ema20'] - last['ema50']) / last['close']
+    if trend_strength < 0.002:  # Sideways market
+        score -= 15
+    
     if not is_uptrend:
-        # Jika downtrend, batasi maksimal score 40 (tidak boleh STRONG BUY)
-        score -= 20  # Penalti berat
+        score -= 20  # Penalti downtrend
     
     if is_price_above_ema:
         score += 8
     else:
         score -= 8
     
-    # ========== 2. RSI (Dikurangi bobotnya) ==========
+    # ========== 3. RSI (DENGAN KONFIRMASI TREND) ==========
     if last['rsi'] < 30:  # Oversold
-        score += 12  # Turun dari 25
+        if is_uptrend:
+            score += 8  # Hanya +8 jika uptrend
+        else:
+            score += 2  # +2 saja jika downtrend (hindari falling knife)
     elif last['rsi'] > 70:  # Overbought
-        score -= 10  # Penalti untuk BUY
+        score -= 10
     elif last['rsi'] > 50:
         score += 5
         
-    # ========== 3. MACD ==========
+    # ========== 4. MACD ==========
     if last['macd'] > last['macd_signal']:
         score += 12
     if last['macd_histogram'] > 0:
         score += 5
         
-    # ========== 4. Bollinger Bands ==========
+    # ========== 5. BOLLINGER BANDS (DENGAN KONFIRMASI RSI) ==========
     if last['close'] <= last['bb_lower']:
-        score += 10
+        if last['rsi'] > 30:  # Hindari breakdown
+            score += 6
     elif last['close'] >= last['bb_upper']:
         score -= 10
     elif last['close'] > last['bb_middle']:
         score += 5
         
-    # ========== 5. VOLUME (WAJIB KONFIRMASI) ==========
+    # ========== 6. VOLUME KONFIRMASI ==========
     volume_surge = last['volume'] > last['volume_ma20'] * 1.2
     volume_price_up = last['close'] > prev['close'] and last['volume'] > prev['volume']
     
-    if volume_surge:
+    # ========== 7. BREAKOUT DETECTOR (FITUR BARU) ==========
+    breakout_high = last['breakout_high'] if 'breakout_high' in last else False
+    breakout_low = last['breakout_low'] if 'breakout_low' in last else False
+    
+    if volume_surge and breakout_high:
+        score += 15  # Breakout dengan volume tinggi
+    elif volume_surge and breakout_low:
+        score -= 15  # Breakdown dengan volume tinggi
+    elif volume_surge:
         score += 12
     else:
-        score -= 5  # Penalti jika volume rendah
+        score -= 5
     
     if volume_price_up:
         score += 5
         
-    # ========== 6. SUPPORT/RESISTANCE ==========
+    # ========== 8. SUPPORT/RESISTANCE ==========
     if last['close'] <= last['support'] * 1.02:
         score += 12
     elif last['close'] >= last['resistance'] * 0.98:
@@ -163,26 +183,35 @@ def calculate_score(df):
     else:
         score += 3
     
-    # ========== 7. ADX SEBAGAI FILTER (DIKUATKAN) ==========
+    # ========== 9. ADX DENGAN CEK ARAH TREND ==========
     if not pd.isna(last['adx']):
         if last['adx'] >= 25:
-            score += 15  # Tren kuat, tambah besar
+            if is_uptrend:
+                score += 15  # Tren naik kuat
+            else:
+                score -= 10  # Tren turun kuat
         elif last['adx'] >= 20:
-            score += 8   # Tren mulai terbentuk
+            if is_uptrend:
+                score += 8
+            else:
+                score -= 5
         elif last['adx'] < 18:
-            score -= 15  # Tren lemah, penalti berat
+            score -= 15  # Tren lemah
     
-    # ========== 8. STOCHASTIC RSI (KONFIRMASI) ==========
+    # ========== 10. STOCHASTIC RSI ==========
     if not pd.isna(last['stoch_rsi_k']):
-        if last['stoch_rsi_k'] < 20:
+        if last['stoch_rsi_k'] < 20 and is_uptrend:
             score += 8
         elif last['stoch_rsi_k'] > 80:
             score -= 8
     
-    # ========== 9. TREND DIRECTION RULE ==========
-    # Jika downtrend, tidak boleh menghasilkan skor tinggi
+    # ========== 11. SELL PROTECTION ==========
+    if last['close'] < last['ema50']:
+        score -= 15  # Harga di bawah EMA50, hati-hati
+    
+    # ========== 12. TREND DIRECTION RULE ==========
     if not is_uptrend and score > 50:
-        score = 50  # Batasi maksimal WAIT, tidak boleh BUY
+        score = 50  # Tidak boleh BUY di downtrend
     
     return min(100, max(0, score))
 
@@ -214,21 +243,20 @@ def get_confidence_level(score):
 
 
 def multi_timeframe_analysis(symbol):
-    """Analisis multi timeframe dengan bobot baru"""
+    """Analisis multi timeframe dengan bobot baru (5m dihilangkan)"""
     timeframes = {
-        "5m": "5m",
         "15m": "15m", 
         "30m": "30m",
         "1h": "60m",
         "1d": "1d"
     }
     
+    # Bobot baru: 5m dihilangkan untuk mengurangi noise
     weights = {
-        "5m": 0.05,
-        "15m": 0.10,
-        "30m": 0.20,
+        "15m": 0.15,
+        "30m": 0.25,
         "1h": 0.30,
-        "1d": 0.35
+        "1d": 0.30
     }
     
     results = {}
