@@ -5,13 +5,28 @@ import numpy as np
 def get_data(symbol="BBCA.JK", interval="5m"):
     """Ambil data dari Yahoo Finance"""
     try:
-        df = yf.download(symbol, interval=interval, period="5d", progress=False)
+        # Atur period berdasarkan interval
+        if interval in ["5m", "15m", "30m"]:
+            period = "5d"
+        elif interval == "60m":
+            period = "1mo"
+        else:  # 1d
+            period = "3mo"
+            
+        df = yf.download(symbol, interval=interval, period=period, progress=False)
+        
         if df is None or df.empty:
             return pd.DataFrame()
+        
         df = df.reset_index()
         df.columns = ["datetime", "open", "high", "low", "close", "volume"]
+        
+        # Hapus baris yang nilainya NaN
+        df = df.dropna()
+        
         return df
-    except Exception:
+    except Exception as e:
+        print(f"Error get_data: {e}")
         return pd.DataFrame()
 
 
@@ -197,24 +212,55 @@ def scan_saham():
 
 
 def get_trading_recommendation(score, df):
-    """Buat rekomendasi trading lengkap"""
+    """Buat rekomendasi trading lengkap dengan Support & Resistance"""
     if df.empty:
         return "Tidak ada data"
     
     last = df.iloc[-1]
     
-    if score >= 60:
+    # Hitung Support & Resistance
+    support = last['support']
+    resistance = last['resistance']
+    atr = last['atr'] if last['atr'] > 0 else last['close'] * 0.02
+    
+    # Untuk semua kondisi, tampilkan level Support/Resistance
+    if score >= 60:  # BUY
         entry = last['close']
-        stop_loss = last['close'] - (last['atr'] * 1.5) if last['atr'] > 0 else last['close'] * 0.97
-        target1 = last['close'] * 1.02
-        target2 = last['close'] * 1.05
-        return f"""**Entry:** Rp{entry:,.0f}
-**Stop Loss:** Rp{stop_loss:,.0f}
-**Target 1:** Rp{target1:,.0f}
-**Target 2:** Rp{target2:,.0f}"""
-    elif score <= 35:
-        return f"""**⚠️ SARAN SELL**
-Harga saat ini: Rp{last['close']:,.0f}
-Resistance terdekat: Rp{last['resistance']:,.0f}"""
-    else:
-        return "Tunggu konfirmasi lebih lanjut"
+        stop_loss = last['close'] - (atr * 1.5)
+        target1 = last['close'] + (atr * 1.5)
+        target2 = last['close'] + (atr * 3)
+        return f"""📈 **REKOMENDASI BUY**
+━━━━━━━━━━━━━━━━━━━━
+💰 **Entry:** Rp{entry:,.0f}
+🛑 **Stop Loss:** Rp{stop_loss:,.0f}
+🎯 **Target 1:** Rp{target1:,.0f}
+🎯 **Target 2:** Rp{target2:,.0f}
+━━━━━━━━━━━━━━━━━━━━
+🛡️ **Support:** Rp{support:,.0f}
+🚧 **Resistance:** Rp{resistance:,.0f}"""
+    
+    elif score <= 35:  # SELL
+        entry = last['close']
+        stop_loss = last['close'] + (atr * 1.5)
+        target1 = last['close'] - (atr * 1.5)
+        target2 = last['close'] - (atr * 3)
+        return f"""📉 **REKOMENDASI SELL**
+━━━━━━━━━━━━━━━━━━━━
+💰 **Entry:** Rp{entry:,.0f}
+🛑 **Stop Loss:** Rp{stop_loss:,.0f}
+🎯 **Target 1:** Rp{target1:,.0f}
+🎯 **Target 2:** Rp{target2:,.0f}
+━━━━━━━━━━━━━━━━━━━━
+🛡️ **Support:** Rp{support:,.0f}
+🚧 **Resistance:** Rp{resistance:,.0f}"""
+    
+    else:  # WAIT/HOLD - tetap tampilkan level
+        return f"""⏳ **REKOMENDASI WAIT/HOLD**
+━━━━━━━━━━━━━━━━━━━━
+📊 **Harga saat ini:** Rp{last['close']:,.0f}
+━━━━━━━━━━━━━━━━━━━━
+🛡️ **Support:** Rp{support:,.0f}
+🚧 **Resistance:** Rp{resistance:,.0f}
+💡 **Saran:** Tunggu konfirmasi lebih lanjut
+   (Harga mendekati Support → potensi BUY)
+   (Harga mendekati Resistance → potensi SELL)"""
