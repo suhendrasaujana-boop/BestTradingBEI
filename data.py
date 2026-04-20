@@ -35,6 +35,10 @@ def add_indicators(df):
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
+    # EMA Slope (Dynamic Trend Strength)
+    df['ema20_slope'] = df['ema20'].diff(5) / df['ema20'].shift(5) * 100
+    df['ema50_slope'] = df['ema50'].diff(5) / df['ema50'].shift(5) * 100
+    
     # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -69,9 +73,14 @@ def add_indicators(df):
     df['resistance'] = df['high'].rolling(window=20).max()
     df['support'] = df['low'].rolling(window=20).min()
     
-    # ========== BREAKOUT DETECTOR ==========
+    # Breakout Detector (Improved)
     df['breakout_high'] = df['close'] > df['high'].rolling(20).max().shift(1)
     df['breakout_low'] = df['close'] < df['low'].rolling(20).min().shift(1)
+    
+    # Candle Body untuk validasi breakout
+    df['candle_body'] = abs(df['close'] - df['open'])
+    df['candle_range'] = df['high'] - df['low']
+    df['candle_strength'] = df['candle_body'] / df['candle_range']
     
     # ADX
     high = df['high']
@@ -103,6 +112,44 @@ def add_indicators(df):
     return df
 
 
+def detect_market_regime(df):
+    """Deteksi kondisi pasar: Trending, Sideways, atau Volatile"""
+    if df.empty or len(df) < 30:
+        return "sideways", 0
+    
+    last = df.iloc[-1]
+    
+    # Ambil ADX terbaru
+    adx = last['adx'] if not pd.isna(last['adx']) else 20
+    
+    # Hitung volatilitas
+    volatility = last['atr'] / last['close'] if last['close'] > 0 else 0.02
+    
+    # Hitung rata-rata rentang harga
+    avg_range = (df['high'] - df['low']).tail(20).mean()
+    current_range = last['high'] - last['low']
+    range_ratio = current_range / avg_range if avg_range > 0 else 1
+    
+    # Logika deteksi
+    if adx >= 25 and volatility < 0.025:
+        regime = "trending_strong"
+        regime_score = 1.2  # Bonus untuk BUY
+    elif adx >= 20 and volatility < 0.03:
+        regime = "trending_weak"
+        regime_score = 1.1
+    elif adx < 20 and volatility < 0.02:
+        regime = "sideways"
+        regime_score = 0.7  # Penalti untuk BUY
+    elif range_ratio > 1.5 or volatility > 0.035:
+        regime = "volatile"
+        regime_score = 0.5  # Penalti besar
+    else:
+        regime = "neutral"
+        regime_score = 1.0
+    
+    return regime, regime_score
+
+
 def calculate_score(df):
     """Hitung skor sinyal (0-100) dengan optimasi akurasi maksimal"""
     if df.empty or len(df) < 50:
@@ -112,41 +159,56 @@ def calculate_score(df):
     last = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else last
     
-    # ========== 1. TREND MASTER FILTER ==========
+    # ========== 1. MARKET REGIME DETECTION ==========
+    regime, regime_score = detect_market_regime(df)
+    
+    # ========== 2. TREND MASTER FILTER ==========
     is_uptrend = last['ema20'] > last['ema50']
     is_price_above_ema = last['close'] > last['ema20']
     
-    # ========== 2. TREND STRENGTH FILTER (SIDEWAYS PENALTY) ==========
+    # ========== 3. DYNAMIC TREND STRENGTH (EMA SLOPE) ==========
+    ema20_slope = last['ema20_slope'] if not pd.isna(last['ema20_slope']) else 0
+    ema50_slope = last['ema50_slope'] if not pd.isna(last['ema50_slope']) else 0
+    
+    if ema20_slope > 0.1 and ema50_slope > 0.05:
+        score += 10  # Trend acceleration
+    elif ema20_slope < -0.1:
+        score -= 10  # Trend deceleration
+    
+    # ========== 4. TREND STRENGTH FILTER (SIDEWAYS PENALTY) ==========
     trend_strength = abs(last['ema20'] - last['ema50']) / last['close']
-    if trend_strength < 0.002:  # Sideways market
+    if trend_strength < 0.002:
         score -= 15
     
+    # Apply market regime multiplier
     if not is_uptrend:
-        score -= 20  # Penalti downtrend
+        score -= 20
     
     if is_price_above_ema:
         score += 8
     else:
         score -= 8
     
-    # ========== 3. RSI (DENGAN KONFIRMASI TREND) ==========
-    if last['rsi'] < 30:  # Oversold
-        if is_uptrend:
-            score += 8
+    # ========== 5. RSI (DENGAN KONFIRMASI TREND) ==========
+    if last['rsi'] < 30:
+        if is_uptrend and regime in ["trending_strong", "trending_weak"]:
+            score += 10
+        elif is_uptrend:
+            score += 6
         else:
             score += 2
-    elif last['rsi'] > 70:  # Overbought
+    elif last['rsi'] > 70:
         score -= 10
     elif last['rsi'] > 50:
         score += 5
         
-    # ========== 4. MACD ==========
+    # ========== 6. MACD ==========
     if last['macd'] > last['macd_signal']:
         score += 12
     if last['macd_histogram'] > 0:
         score += 5
         
-    # ========== 5. BOLLINGER BANDS ==========
+    # ========== 7. BOLLINGER BANDS ==========
     if last['close'] <= last['bb_lower']:
         if last['rsi'] > 30:
             score += 6
@@ -155,34 +217,41 @@ def calculate_score(df):
     elif last['close'] > last['bb_middle']:
         score += 5
         
-    # ========== 6. VOLUME KONFIRMASI ==========
+    # ========== 8. VOLUME KONFIRMASI ==========
     volume_surge = last['volume'] > last['volume_ma20'] * 1.2
     volume_price_up = last['close'] > prev['close'] and last['volume'] > prev['volume']
     
-    # ========== 7. BREAKOUT DETECTOR ==========
+    # ========== 9. IMPROVED BREAKOUT LOGIC ==========
     breakout_high = last['breakout_high'] if 'breakout_high' in last else False
     breakout_low = last['breakout_low'] if 'breakout_low' in last else False
+    candle_strength = last['candle_strength'] if 'candle_strength' in last else 0.5
     
-    if volume_surge and breakout_high:
-        score += 15
-    elif volume_surge and breakout_low:
-        score -= 15
-    elif volume_surge:
+    # Valid breakout: candle kuat + volume surge + di atas EMA20
+    valid_breakout = breakout_high and candle_strength > 0.6 and volume_surge and last['close'] > last['ema20']
+    valid_breakdown = breakout_low and candle_strength > 0.6 and volume_surge and last['close'] < last['ema20']
+    
+    if valid_breakout:
+        score += 18
+    elif breakout_high and volume_surge:
         score += 12
-    else:
-        score -= 5
+    elif breakout_high:
+        score += 5
+    elif valid_breakdown:
+        score -= 18
+    elif breakout_low and volume_surge:
+        score -= 12
     
     if volume_price_up:
         score += 5
         
-    # ========== 8. FALSE BREAKOUT FILTER (FITUR BARU) ==========
+    # ========== 10. FALSE BREAKOUT FILTER ==========
     if breakout_high and last['close'] < last['ema20']:
-        score -= 12  # breakout tapi masih di bawah EMA20 = fake
+        score -= 12
     
     if breakout_low and last['close'] > last['ema20']:
-        score += 5   # fake breakdown (bullish)
+        score += 5
     
-    # ========== 9. SUPPORT/RESISTANCE ==========
+    # ========== 11. SUPPORT/RESISTANCE ==========
     if last['close'] <= last['support'] * 1.02:
         score += 12
     elif last['close'] >= last['resistance'] * 0.98:
@@ -190,14 +259,14 @@ def calculate_score(df):
     else:
         score += 3
     
-    # ========== 10. VOLATILITY FILTER (FITUR BARU) ==========
+    # ========== 12. VOLATILITY FILTER ==========
     volatility = last['atr'] / last['close']
-    if volatility < 0.005:  # Terlalu sepi
+    if volatility < 0.005:
         score -= 10
-    elif volatility > 0.03:  # Terlalu liar
+    elif volatility > 0.03:
         score -= 5
     
-    # ========== 11. ADX DENGAN CEK ARAH TREND ==========
+    # ========== 13. ADX DENGAN CEK ARAH TREND ==========
     if not pd.isna(last['adx']):
         if last['adx'] >= 25:
             if is_uptrend:
@@ -212,27 +281,43 @@ def calculate_score(df):
         elif last['adx'] < 18:
             score -= 15
     
-    # ========== 12. STRONG TREND BONUS (FITUR BARU) ==========
+    # ========== 14. STRONG TREND BONUS ==========
     if not pd.isna(last['adx']):
         if last['adx'] > 30 and is_uptrend and last['close'] > last['ema20']:
-            score += 10  # Strong trend = akselerasi BUY
+            score += 10
     
-    # ========== 13. STOCHASTIC RSI ==========
+    # ========== 15. RISK QUALITY FILTER ==========
+    risk_reward_ratio = (last['resistance'] - last['close']) / (last['close'] - last['support']) if (last['close'] - last['support']) > 0 else 1
+    if risk_reward_ratio < 1.5:
+        score -= 10  # Reward terlalu kecil
+    elif risk_reward_ratio > 3:
+        score += 8   # Reward bagus
+    
+    # ========== 16. STOCHASTIC RSI ==========
     if not pd.isna(last['stoch_rsi_k']):
         if last['stoch_rsi_k'] < 20 and is_uptrend:
             score += 8
         elif last['stoch_rsi_k'] > 80:
             score -= 8
     
-    # ========== 14. SELL PROTECTION ==========
+    # ========== 17. SELL PROTECTION ==========
     if last['close'] < last['ema50']:
         score -= 15
     
-    # ========== 15. TREND DIRECTION RULE ==========
+    # ========== 18. APPLY MARKET REGIME MULTIPLIER ==========
+    score = score * regime_score
+    
+    # ========== 19. TREND DIRECTION RULE ==========
     if not is_uptrend and score > 50:
         score = 50
     
-    return min(100, max(0, score))
+    # ========== 20. REGIME-BASED LIMIT ==========
+    if regime == "sideways" and score > 60:
+        score = 60  # Di sideways, maksimal WAIT
+    elif regime == "volatile" and score > 40:
+        score = 40  # Di volatile, kurangi eksposur
+    
+    return min(100, max(0, int(score)))
 
 
 def get_signal_label(score):
@@ -261,8 +346,20 @@ def get_confidence_level(score):
         return "❌ VERY LOW CONFIDENCE", "red"
 
 
+def get_market_regime_text(regime):
+    """Dapatkan teks regime pasar"""
+    regime_text = {
+        "trending_strong": "📈 Trending Kuat (Agresif)",
+        "trending_weak": "📈 Trending Lemah (Normal)",
+        "sideways": "🔄 Sideways (Hati-hati)",
+        "volatile": "🎢 Volatile (Kurangi Eksposur)",
+        "neutral": "⚖️ Netral"
+    }
+    return regime_text.get(regime, "⚖️ Netral")
+
+
 def multi_timeframe_analysis(symbol):
-    """Analisis multi timeframe dengan bobot baru (5m dihilangkan)"""
+    """Analisis multi timeframe dengan sinkronisasi"""
     timeframes = {
         "15m": "15m", 
         "30m": "30m",
@@ -279,6 +376,7 @@ def multi_timeframe_analysis(symbol):
     
     results = {}
     weighted_score = 0
+    all_scores = []
     
     for label, tf in timeframes.items():
         df = get_data(symbol, tf)
@@ -290,6 +388,18 @@ def multi_timeframe_analysis(symbol):
         score = calculate_score(df)
         results[label] = score
         weighted_score += score * weights[label]
+        all_scores.append(score)
+    
+    # ========== MULTI-TIMEFRAME SINKRONISASI ==========
+    # Bonus jika semua timeframe searah
+    if len(all_scores) >= 3:
+        buy_count = sum(1 for s in all_scores if s >= 60)
+        sell_count = sum(1 for s in all_scores if s <= 35)
+        
+        if buy_count >= 3:
+            weighted_score *= 1.15  # Bonus 15%
+        elif sell_count >= 3:
+            weighted_score *= 0.85  # Penalti
     
     results['weighted'] = round(weighted_score, 2)
     
@@ -348,6 +458,10 @@ def get_trading_recommendation(score, df):
     atr = last['atr'] if last['atr'] > 0 else last['close'] * 0.02
     harga = last['close']
     
+    # Deteksi market regime
+    regime, _ = detect_market_regime(df)
+    regime_text = get_market_regime_text(regime)
+    
     adx_text = ""
     if 'adx' in last and not pd.isna(last['adx']):
         if last['adx'] >= 25:
@@ -371,8 +485,9 @@ def get_trading_recommendation(score, df):
 🎯 **Target 2 (Jual):** Rp{target2:,.0f} (naik {((target2 - entry)/entry*100):.1f}%)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {adx_text}
-🛡️ **Support:** Rp{support:,.0f} (harga terendah)
-🚧 **Resistance:** Rp{resistance:,.0f} (harga tertinggi)
+📊 **Market Regime:** {regime_text}
+🛡️ **Support:** Rp{support:,.0f}
+🚧 **Resistance:** Rp{resistance:,.0f}
 """
     
     elif score <= 35:
@@ -389,8 +504,9 @@ def get_trading_recommendation(score, df):
 🎯 **Target 2 (Beli Kembali):** Rp{target2:,.0f} (turun {((entry - target2)/entry*100):.1f}%)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {adx_text}
-🛡️ **Support:** Rp{support:,.0f} (harga terendah)
-🚧 **Resistance:** Rp{resistance:,.0f} (harga tertinggi)
+📊 **Market Regime:** {regime_text}
+🛡️ **Support:** Rp{support:,.0f}
+🚧 **Resistance:** Rp{resistance:,.0f}
 """
     
     else:
@@ -400,6 +516,7 @@ def get_trading_recommendation(score, df):
 📊 **Harga saat ini:** Rp{harga:,.0f}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {adx_text}
+📊 **Market Regime:** {regime_text}
 🛡️ **Support:** Rp{support:,.0f}
 🚧 **Resistance:** Rp{resistance:,.0f}
 💡 **Saran:** Harga mendekati Support → potensi BUY
