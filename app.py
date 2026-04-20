@@ -8,6 +8,7 @@ from data import (
     add_indicators,
     calculate_score,
     get_signal_label,
+    get_confidence_level,
     multi_timeframe_analysis,
     scan_saham,
     get_trading_recommendation
@@ -47,6 +48,7 @@ if df.empty:
 df = add_indicators(df)
 score = calculate_score(df)
 signal_label, signal_color, signal_emoji = get_signal_label(score)
+confidence_label, confidence_color = get_confidence_level(score)
 last = df.iloc[-1]
 
 # ========== HARGA TERTINGGI, TERENDAH, SAAT INI ==========
@@ -58,7 +60,6 @@ with col_high:
 with col_low:
     st.metric("📉 Terendah (Low)", f"Rp{last['low']:,.0f}")
 with col_close:
-    # Hitung perubahan harga
     if len(df) > 1:
         change = last['close'] - df.iloc[-2]['close']
         change_pct = (change / df.iloc[-2]['close']) * 100
@@ -86,12 +87,18 @@ with col_left:
             st.info("🟢 Oversold (peluang beli)")
         elif last['rsi'] > 70:
             st.warning("🔴 Overbought")
+        # Tampilkan Stochastic RSI
+        if 'stoch_rsi_k' in last and not pd.isna(last['stoch_rsi_k']):
+            st.caption(f"Stoch RSI: {last['stoch_rsi_k']:.1f}")
     with col_macd:
         st.metric("MACD", f"{last['macd']:.2f}")
         st.metric("Signal", f"{last['macd_signal']:.2f}", delta=f"{last['macd_histogram']:.2f}")
     with col_vol:
         st.metric("Volume", f"{last['volume']:,.0f}")
         st.metric("MA20", f"{last['volume_ma20']:,.0f}")
+        # Tampilkan peringatan volume rendah
+        if last['volume'] < last['volume_ma20'] * 0.8:
+            st.warning("⚠️ Volume rendah")
 
 with col_right:
     # SIGNAL CARD
@@ -111,6 +118,13 @@ with col_right:
     </div>
     """, unsafe_allow_html=True)
     
+    # CONFIDENCE LEVEL (FITUR BARU)
+    st.markdown(f"""
+    <div style="background-color:#f0f2f6; padding:5px; border-radius:10px; text-align:center; margin-top:5px">
+        <p style="margin:0; color:black">Keyakinan: <strong>{confidence_label}</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown("---")
     
     # REKOMENDASI
@@ -127,6 +141,18 @@ with col_right:
         st.metric("🛡️ Support", f"Rp{last['support']:,.0f}")
     with col_res:
         st.metric("🚧 Resistance", f"Rp{last['resistance']:,.0f}")
+    
+    # Tampilkan ADX jika ada
+    if 'adx' in last and not pd.isna(last['adx']):
+        st.markdown("---")
+        st.subheader("📊 Trend Strength")
+        adx_value = last['adx']
+        if adx_value >= 25:
+            st.success(f"ADX: {adx_value:.1f} (Tren Kuat ✅)")
+        elif adx_value >= 20:
+            st.info(f"ADX: {adx_value:.1f} (Tren Mulai)")
+        else:
+            st.warning(f"ADX: {adx_value:.1f} (Tren Lemah ⚠️)")
 
 # ========== MULTI TIMEFRAME ==========
 st.markdown("---")
@@ -135,6 +161,10 @@ st.subheader("⏰ Multi Timeframe")
 mtf = multi_timeframe_analysis(symbol)
 avg_score = mtf.get('weighted', 0)
 final_label, final_color, final_emoji = get_signal_label(avg_score)
+
+# Tampilkan peringatan filter daily jika ada
+if mtf.get('filtered', False):
+    st.warning(mtf.get('filter_message', ''))
 
 # Tampilkan MTF dengan 5 kolom
 col5m, col15m, col30m, col1h, col1d = st.columns(5)
