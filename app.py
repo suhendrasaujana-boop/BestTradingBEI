@@ -11,7 +11,8 @@ from data import (
     get_confidence_level,
     multi_timeframe_analysis,
     scan_saham,
-    get_trading_recommendation
+    get_trading_recommendation,
+    backtest_strategy
 )
 
 st.set_page_config(
@@ -87,7 +88,6 @@ with col_left:
             st.info("🟢 Oversold (peluang beli)")
         elif last['rsi'] > 70:
             st.warning("🔴 Overbought")
-        # Tampilkan Stochastic RSI
         if 'stoch_rsi_k' in last and not pd.isna(last['stoch_rsi_k']):
             st.caption(f"Stoch RSI: {last['stoch_rsi_k']:.1f}")
     with col_macd:
@@ -96,12 +96,10 @@ with col_left:
     with col_vol:
         st.metric("Volume", f"{last['volume']:,.0f}")
         st.metric("MA20", f"{last['volume_ma20']:,.0f}")
-        # Tampilkan peringatan volume rendah
         if last['volume'] < last['volume_ma20'] * 0.8:
             st.warning("⚠️ Volume rendah")
 
 with col_right:
-    # SIGNAL CARD
     st.subheader("🎯 Sinyal")
     
     if "BUY" in signal_label:
@@ -118,7 +116,6 @@ with col_right:
     </div>
     """, unsafe_allow_html=True)
     
-    # CONFIDENCE LEVEL (FITUR BARU)
     st.markdown(f"""
     <div style="background-color:#f0f2f6; padding:5px; border-radius:10px; text-align:center; margin-top:5px">
         <p style="margin:0; color:black">Keyakinan: <strong>{confidence_label}</strong></p>
@@ -126,15 +123,11 @@ with col_right:
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    
-    # REKOMENDASI
     st.subheader("📝 Rekomendasi")
     rekomendasi = get_trading_recommendation(score, df)
     st.markdown(rekomendasi)
     
     st.markdown("---")
-    
-    # LEVEL SUPPORT & RESISTANCE
     st.subheader("📊 Support & Resistance")
     col_sup, col_res = st.columns(2)
     with col_sup:
@@ -142,7 +135,6 @@ with col_right:
     with col_res:
         st.metric("🚧 Resistance", f"Rp{last['resistance']:,.0f}")
     
-    # Tampilkan ADX jika ada
     if 'adx' in last and not pd.isna(last['adx']):
         st.markdown("---")
         st.subheader("📊 Trend Strength")
@@ -162,11 +154,9 @@ mtf = multi_timeframe_analysis(symbol)
 avg_score = mtf.get('weighted', 0)
 final_label, final_color, final_emoji = get_signal_label(avg_score)
 
-# Tampilkan peringatan filter daily jika ada
 if mtf.get('filtered', False):
     st.warning(mtf.get('filter_message', ''))
 
-# Tampilkan MTF dengan 5 kolom
 col5m, col15m, col30m, col1h, col1d = st.columns(5)
 
 with col5m:
@@ -185,7 +175,6 @@ with col1d:
     s = mtf.get("1d", 0)
     st.metric("1d", f"{s:.0f}")
 
-# Final Signal
 if "BUY" in final_label:
     final_bg = "#90EE90"
 elif "SELL" in final_label:
@@ -199,6 +188,31 @@ st.markdown(f"""
     <p style="margin:0; color:black">Score: {avg_score:.1f}/100</p>
 </div>
 """, unsafe_allow_html=True)
+
+# ========== BACKTEST ==========
+st.markdown("---")
+with st.expander("📊 Backtest Strategy (Threshold BUY>=60, SELL<=40)"):
+    if st.button("Jalankan Backtest", key="backtest_btn"):
+        with st.spinner("Menghitung performa..."):
+            result = backtest_strategy(df)
+            col_b1, col_b2, col_b3 = st.columns(3)
+            with col_b1:
+                st.metric("Return (%)", f"{result['return']}%")
+            with col_b2:
+                st.metric("Winrate (%)", f"{result['winrate']}%")
+            with col_b3:
+                st.metric("Jumlah Trades", result['trades'])
+            st.caption(f"Modal awal: Rp100.000.000 → Akhir: Rp{result['final_capital']:,.0f}")
+            if result['trades'] > 0:
+                if result['winrate'] >= 55 and result['return'] > 20:
+                    st.success(f"✅ Performa bagus: Winrate {result['winrate']}% dengan return {result['return']}% dari {result['trades']} trade.")
+                    st.balloons()
+                else:
+                    st.info(f"Hasil backtest: Winrate {result['winrate']}%, Return {result['return']}%, Trades {result['trades']}.")
+            else:
+                st.warning("Tidak ada sinyal trade dalam periode ini.")
+    else:
+        st.info("Klik tombol di atas untuk melihat performa strategi berdasarkan data historis.")
 
 # ========== SCANNER ==========
 st.markdown("---")
@@ -217,6 +231,5 @@ if st.button("🚀 Scan Market", use_container_width=True):
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# FOOTER
 st.markdown("---")
 st.caption("⚠️ Disclaimer: Alat bantu analisis, bukan rekomendasi investasi.")
