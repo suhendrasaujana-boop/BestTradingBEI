@@ -97,11 +97,11 @@ def add_indicators(df):
     df['stoch_rsi_k'] = df['stoch_rsi'].rolling(3).mean()
     df['stoch_rsi_d'] = df['stoch_rsi_k'].rolling(3).mean()
 
-    # ========== UPGRADE: Trend Quality ==========
+    # Upgrade: Trend Quality
     df['trend_strength'] = abs(df['ema20'] - df['ema50']) / df['close']
     df['trend_quality'] = df['trend_strength'] / df['atr'].replace(0, np.nan)
 
-    # ========== UPGRADE: Upper wick (liquidity trap) ==========
+    # Upgrade: Upper/Lower wick (liquidity trap)
     df['upper_wick'] = df['high'] - df[['close', 'open']].max(axis=1)
     df['lower_wick'] = df[['close', 'open']].min(axis=1) - df['low']
 
@@ -154,12 +154,12 @@ def calculate_score(df):
     # Market regime
     regime, regime_score = detect_market_regime(df)
 
-    # ========== UPGRADE: Volatility Regime Fix ==========
+    # Volatility Regime Fix
     volatility = last['atr'] / last['close'] if last['close'] > 0 else 0.02
     if volatility < 0.007:
-        score -= 10   # dead market
+        score -= 10
     elif volatility > 0.04:
-        score -= 8    # chaos
+        score -= 8
 
     # Trend basics
     is_uptrend = last['ema20'] > last['ema50']
@@ -179,19 +179,19 @@ def calculate_score(df):
     elif ema20_slope < -0.1:
         score -= 10
 
-    # ========== UPGRADE: Trend Quality ==========
-    if not pd.isna(last['trend_quality']):
+    # Trend Quality
+    if not pd.isna(last.get('trend_quality', np.nan)):
         if last['trend_quality'] > 1.5:
             score += 12
         elif last['trend_quality'] < 0.7:
             score -= 12
 
-    # ========== UPGRADE: Smart RSI ==========
+    # Smart RSI
     if last['rsi'] < 30:
         if is_uptrend:
-            score += 10   # valid pullback
+            score += 10
         else:
-            score += 2    # falling knife, pelan
+            score += 2
     elif last['rsi'] > 70:
         score -= 10
     elif last['rsi'] > 50:
@@ -212,7 +212,7 @@ def calculate_score(df):
     elif last['close'] > last['bb_middle']:
         score += 5
 
-    # ========== UPGRADE: Volume Validity ==========
+    # Volume Validity
     volume_surge = last['volume'] > last['volume_ma20'] * 1.2
     volume_valid = (last['volume'] > last['volume_ma20'] * 1.3) and (last['close'] > prev['close'])
     if volume_valid:
@@ -220,26 +220,23 @@ def calculate_score(df):
     else:
         score -= 5
 
-    # Existing volume price up
     volume_price_up = last['close'] > prev['close'] and last['volume'] > prev['volume']
     if volume_price_up:
         score += 5
 
-    # ========== UPGRADE: Fake Breakout Killer ==========
+    # Breakout & Fake Breakout Killer
     breakout_high = last.get('breakout_high', False)
     breakout_low = last.get('breakout_low', False)
     candle_strength = last.get('candle_strength', 0.5)
     if pd.isna(candle_strength):
         candle_strength = 0.5
 
-    # Valid breakout dengan volume dan candle kuat
     valid_breakout = breakout_high and candle_strength > 0.6 and volume_surge and last['close'] > last['ema20']
     valid_breakdown = breakout_low and candle_strength > 0.6 and volume_surge and last['close'] < last['ema20']
 
-    # Fake breakout killer
     fake_breakout = breakout_high and (last['close'] < last['ema20'])
     if fake_breakout:
-        score -= 15   # kurangi besar karena jebakan
+        score -= 15
 
     if valid_breakout:
         score += 18
@@ -252,17 +249,15 @@ def calculate_score(df):
     elif breakout_low and volume_surge:
         score -= 12
 
-    # False breakout filter tambahan
     if breakout_high and last['close'] < last['ema20']:
         score -= 12
     if breakout_low and last['close'] > last['ema20']:
         score += 5
 
-    # ========== UPGRADE: Risk-Reward Filter ==========
+    # Risk-Reward Filter
     support = last['support']
     resistance = last['resistance']
     close = last['close']
-    # Hindari pembagian nol
     rr_denom = (close - support) if (close - support) > 0 else 0.01
     rr = (resistance - close) / rr_denom
     if rr < 1.3:
@@ -270,14 +265,14 @@ def calculate_score(df):
     elif rr > 2:
         score += 10
 
-    # ========== UPGRADE: Liquidity Trap (Upper Wick) ==========
+    # Liquidity Trap (Upper Wick)
     upper_wick = last.get('upper_wick', 0)
     candle_body = last.get('candle_body', 0.01)
     if not pd.isna(upper_wick) and not pd.isna(candle_body) and candle_body > 0:
         if upper_wick > candle_body * 2:
-            score -= 10   # tanda distribusi
+            score -= 10
 
-    # Support / resistance
+    # Support/Resistance proximity
     if last['close'] <= last['support'] * 1.02:
         score += 12
     elif last['close'] >= last['resistance'] * 0.98:
@@ -285,7 +280,7 @@ def calculate_score(df):
     else:
         score += 3
 
-    # ADX (tetap)
+    # ADX
     if not pd.isna(last['adx']):
         if last['adx'] >= 25:
             if is_uptrend:
@@ -300,7 +295,6 @@ def calculate_score(df):
         elif last['adx'] < 18:
             score -= 15
 
-    # Strong trend bonus
     if not pd.isna(last['adx']):
         if last['adx'] > 30 and is_uptrend and last['close'] > last['ema20']:
             score += 10
@@ -316,7 +310,7 @@ def calculate_score(df):
     if last['close'] < last['ema50']:
         score -= 15
 
-    # Market regime multiplier (existing)
+    # Regime multiplier
     score = score * regime_score
 
     # Trend direction rule
@@ -329,7 +323,6 @@ def calculate_score(df):
 
     return min(100, max(0, int(score)))
 
-# Fungsi-fungsi berikut tetap sama seperti aslinya (tidak perlu diubah)
 def get_signal_label(score):
     if score >= 75:
         return "🔥 STRONG BUY", "green", "🟢"
@@ -468,3 +461,35 @@ def get_trading_recommendation(score, df):
 💡 **Saran:** Harga mendekati Support → potensi BUY
          Harga mendekati Resistance → potensi SELL
 """
+
+def backtest_strategy(df, capital_initial=100_000_000, buy_threshold=60, sell_threshold=40):
+    """Backtest sederhana berdasarkan skor."""
+    if df.empty or len(df) < 50:
+        return {"return": 0, "winrate": 0, "trades": 0, "final_capital": capital_initial}
+    capital = capital_initial
+    position = 0
+    entry_price = 0
+    trades = []
+    for i in range(50, len(df)):
+        sub_df = df.iloc[:i+1].copy()
+        score = calculate_score(sub_df)
+        price = df.iloc[i]['close']
+        if score >= buy_threshold and position == 0:
+            position = capital / price
+            entry_price = price
+            capital = 0
+        elif score <= sell_threshold and position > 0:
+            pnl = (price - entry_price) / entry_price
+            trades.append(pnl)
+            capital = position * price
+            position = 0
+    if position > 0:
+        capital = position * df.iloc[-1]['close']
+    total_return_pct = (capital - capital_initial) / capital_initial * 100
+    winrate = (sum(1 for t in trades if t > 0) / len(trades) * 100) if trades else 0
+    return {
+        "return": round(total_return_pct, 2),
+        "winrate": round(winrate, 2),
+        "trades": len(trades),
+        "final_capital": round(capital, 0)
+    }
