@@ -6,7 +6,7 @@ from datetime import datetime
 
 _data_cache = {}
 _last_request_time = 0
-_MIN_REQUEST_INTERVAL = 2
+_MIN_REQUEST_INTERVAL = 1
 
 def _wait_for_rate_limit():
     global _last_request_time
@@ -20,14 +20,17 @@ def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
     
+    # Fix untuk kode saham
     if symbol == "^JKSE" or symbol == "JKSE":
         symbol = "^JKSE"
+    elif not symbol.endswith('.JK') and symbol not in ["^JKSE"]:
+        symbol = f"{symbol}.JK"
     
     cache_key = f"{symbol}_{timeframe}"
     
     if cache_key in _data_cache:
         cached_time, cached_data = _data_cache[cache_key]
-        if (datetime.now() - cached_time).seconds < 30:
+        if (datetime.now() - cached_time).seconds < 60:
             return cached_data
     
     try:
@@ -38,7 +41,7 @@ def get_data(symbol, timeframe="1d"):
         if timeframe in ["5m", "15m", "30m", "60m"]:
             period = "7d"
         else:
-            period = "3mo"
+            period = "2mo"
         
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
@@ -61,30 +64,36 @@ def add_indicators(df):
         return df
     df = df.copy()
     
+    # EMA
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
+    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
+    # MACD
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
     
+    # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
     
+    # ATR
     high_low = df['high'] - df['low']
     high_close = abs(df['high'] - df['close'].shift())
     low_close = abs(df['low'] - df['close'].shift())
     df['tr'] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     
+    # ADX
     plus_dm = df['high'].diff()
     minus_dm = df['low'].diff()
     plus_dm[plus_dm < 0] = 0
@@ -95,6 +104,7 @@ def add_indicators(df):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df['adx'] = dx.rolling(window=14).mean()
     
+    # Support & Resistance
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
@@ -124,15 +134,6 @@ def get_ihsg_trend():
         return trend, score, f"IHSG {trend} ({daily_change:+.1f}%)"
     except:
         return "NEUTRAL", 50, "IHSG data unavailable"
-
-def get_ihsg_filter_penalty():
-    trend, score, msg = get_ihsg_trend()
-    if trend == "BEARISH":
-        return -20, f"IHSG Bearish! Turunkan ekspektasi"
-    elif trend == "SIDEWAYS":
-        return -10, f"IHSG Sideways, selektif"
-    else:
-        return 0, f"IHSG Bullish mendukung"
 
 def detect_bottom_pattern(df):
     if df.empty or len(df) < 30:
@@ -261,9 +262,7 @@ def detect_reversal(df):
         return reversal_type, min(100, confidence), desc
     return "NONE", confidence, desc
 
-# ========== FUNGSI UTAMA ==========
 def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
-    """Menghitung ENTRY, SL, TP dari INDIKATOR"""
     if df.empty or len(df) < 30:
         return None, None, None, 0, 0, "NO_SETUP", 0
     
@@ -289,28 +288,28 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         entry_price = resistance * 1.002
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
-        setup_name = f"BREAKOUT_BUY"
+        setup_name = "BREAKOUT BUY"
         confidence = breakout_conf
     
     elif is_bottom and reversal_type == "BULLISH" and bottom_conf >= 50:
         entry_price = last['close'] * 1.001
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
-        setup_name = "BOTTOM_REVERSAL_BUY"
+        setup_name = "BOTTOM REVERSAL BUY"
         confidence = bottom_conf
     
     elif reversal_type == "BULLISH" and reversal_conf >= 60:
         entry_price = last['close'] * 1.001
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
-        setup_name = "REVERSAL_BUY"
+        setup_name = "REVERSAL BUY"
         confidence = reversal_conf
     
     elif trend_up and strong_trend and momentum_bullish and volume_spike:
         entry_price = last['close']
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
-        setup_name = "TREND_BUY"
+        setup_name = "TREND BUY"
         confidence = 70
     
     else:
@@ -340,9 +339,9 @@ def detect_high_quality_setup(df):
     
     if entry:
         if conf >= 80:
-            return f"{setup}_SNIPER", conf, "Sniper setup - eksekusi"
+            return f"{setup} (SNIPER)", conf, "Sniper setup - eksekusi"
         elif conf >= 65:
-            return f"{setup}_HIGH", conf, "High quality - bisa eksekusi"
+            return f"{setup} (HIGH)", conf, "High quality - bisa eksekusi"
         else:
             return setup, conf, "Setup medium - tunggu konfirmasi"
     
@@ -357,11 +356,11 @@ def calculate_confidence_score(df, ihsg_score=50):
     total = 50
     
     if last['ema20'] > last['ema50']:
-        total += 12
-        factors.append(("Trend", 12, "Bullish"))
+        total += 15
+        factors.append(("Trend", 15, "Bullish"))
     else:
-        total -= 12
-        factors.append(("Trend", -12, "Bearish"))
+        total -= 15
+        factors.append(("Trend", -15, "Bearish"))
     
     if last['adx'] >= 25:
         total += 15
@@ -380,12 +379,10 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 10
         factors.append(("Volume", -10, "Sepi"))
     
-    macd_bullish = last['macd_histogram'] > 0
-    rsi_bullish = last['rsi'] > 50
-    if macd_bullish and rsi_bullish:
+    if last['macd_histogram'] > 0 and last['rsi'] > 50:
         total += 15
         factors.append(("Momentum", 15, "Bullish"))
-    elif not macd_bullish and not rsi_bullish:
+    elif last['macd_histogram'] < 0 and last['rsi'] < 50:
         total -= 15
         factors.append(("Momentum", -15, "Bearish"))
     
@@ -403,70 +400,47 @@ def calculate_confidence_score(df, ihsg_score=50):
     
     return final, factors, grade
 
-def multi_timeframe_analysis(symbol, capital=100000000, risk_percent=2):
-    timeframes = ["5m", "15m", "30m", "60m", "1d"]
-    results = {}
-    
-    for tf in timeframes:
-        try:
-            df = get_data(symbol, tf)
-            if not df.empty and len(df) > 30:
-                df = add_indicators(df)
-                score, _, _ = calculate_confidence_score(df)
-                entry, sl, tp, shares, rr, setup, conf = calculate_entry_sl_tp(df, capital, risk_percent)
-                
-                results[tf] = {
-                    "score": score,
-                    "entry": entry,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "rr": rr,
-                    "setup": setup,
-                    "confidence": conf
-                }
-            else:
-                results[tf] = {"score": 50, "entry": None, "stop_loss": None, "take_profit": None, "rr": 0, "setup": "NO_DATA", "confidence": 0}
-            time.sleep(0.5)
-        except Exception as e:
-            results[tf] = {"score": 50, "entry": None, "stop_loss": None, "take_profit": None, "rr": 0, "setup": "ERROR", "confidence": 0}
-    
-    weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "60m": 0.25, "1d": 0.45}
-    weighted = sum(results[tf]["score"] * weights.get(tf, 0.2) for tf in timeframes)
-    
-    return results, weighted
-
 def scan_saham():
     stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "TLKM.JK", "ASII.JK"]
     results = []
+    
     for stock in stocks:
         try:
             df = get_data(stock, "1d")
-            if not df.empty and len(df) > 30:
+            if not df.empty and len(df) > 20:
                 df = add_indicators(df)
                 setup, quality, msg = detect_high_quality_setup(df)
-                if quality >= 65:
+                if quality >= 60:
                     if "BUY" in setup:
-                        signal = "BUY"
+                        signal = "🔥 BUY"
                     elif "SELL" in setup:
-                        signal = "SELL"
+                        signal = "🔴 SELL"
                     else:
-                        signal = "HOLD"
-                    results.append({"Kode": stock, "Score": f"{quality:.0f}", "Setup": msg[:25], "Sinyal": signal})
-            time.sleep(0.5)
-        except:
+                        signal = "⏸️ HOLD"
+                    results.append({
+                        "Kode": stock,
+                        "Score": f"{quality:.0f}",
+                        "Setup": msg[:30],
+                        "Sinyal": signal,
+                        "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
+                    })
+            time.sleep(1)
+        except Exception as e:
             continue
+    
     results.sort(key=lambda x: int(x['Score']), reverse=True)
     return results[:5]
 
 def get_trading_recommendation(df):
     setup, quality, msg = detect_high_quality_setup(df)
     if quality >= 85:
-        return f"Sniper eksekusi - {msg}"
+        return f"🎯 {msg} - Sniper eksekusi dengan Risk Reward minimal 1:2"
     elif quality >= 70:
-        return f"Setup bagus - {msg}"
+        return f"📈 {msg} - Setup bagus, pastikan konfirmasi"
     elif quality >= 55:
-        return f"Tunggu konfirmasi - {msg}"
-    return f"No trade zone - {msg}"
+        return f"⏸️ {msg} - Menunggu konfirmasi lebih lanjut"
+    else:
+        return f"⛔ {msg} - NO TRADE ZONE, hindari entry"
 
 def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
     if df.empty or len(df) < 30:
@@ -481,21 +455,19 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
     max_dd = 0
     entry_price_used = 0
     stop_price = 0
-    take_price = 0
     
     for i in range(20, len(df_test)):
         entry, sl, tp, shares, rr, setup, conf = calculate_entry_sl_tp(df_test.iloc[:i+1], capital, risk_per_trade)
         close = df_test.iloc[i]['close']
         
-        if entry and "BUY" in setup and position == 0:
-            if shares > 0:
-                entry_price_used = entry * (1 + slippage)
-                cost = shares * entry_price_used * (1 + fee_buy)
-                if cost <= capital:
-                    position = shares
-                    capital -= cost
-                    stop_price = sl
-                    take_price = tp
+        if entry and "BUY" in setup and position == 0 and shares > 0:
+            entry_price_used = entry * (1 + slippage)
+            cost = shares * entry_price_used * (1 + fee_buy)
+            if cost <= capital:
+                position = shares
+                capital -= cost
+                stop_price = sl
+                take_price = tp
         
         elif position > 0:
             if close <= stop_price:
