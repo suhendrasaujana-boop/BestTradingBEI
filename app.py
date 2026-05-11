@@ -48,7 +48,7 @@ def check_password():
     # Lalu aktifkan baris di bawah dan hapus baris hardcode.
 
     # === HARDCODE SEMENTARA (GANTI DENGAN PASSWORD ANDA) ===
-    correct_password = "admin123"   # <-- GANTI INI
+    correct_password = "kuntul123"   # <-- GANTI INI
     # ===================================================
 
     # Alternatif menggunakan st.secrets (Lebih aman untuk deployment)
