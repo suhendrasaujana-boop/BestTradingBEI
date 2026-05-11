@@ -189,22 +189,22 @@ if entry_price > 0:
     st.subheader("📌 REKOMENDASI AKSI")
     
     if current_price <= stop_loss_price:
-        st.error(f"🔴 **CUT LOSS!** Harga turun {stop_loss_percent}% dari entry ({Rp{stop_loss_price:,.0f}}). Segera jual!")
+        st.error(f"🔴 CUT LOSS! Harga turun {stop_loss_percent}% dari entry (Rp{stop_loss_price:,.0f}). Segera jual!")
     elif current_price >= take_profit_price:
-        st.success(f"🟢 **TAKE PROFIT!** Harga naik {take_profit_percent}% dari entry ({Rp{take_profit_price:,.0f}}). Ambil untung!")
+        st.success(f"🟢 TAKE PROFIT! Harga naik {take_profit_percent}% dari entry (Rp{take_profit_price:,.0f}). Ambil untung!")
     elif score >= 70:
-        st.success(f"🔥 **HOLD & TAMBAH POSISI** - Sinyal STRONG BUY, tren sangat kuat. Cut loss di {Rp{stop_loss_price:,.0f}}")
+        st.success(f"🔥 HOLD & TAMBAH POSISI - Sinyal STRONG BUY, tren sangat kuat. Cut loss di Rp{stop_loss_price:,.0f}")
     elif score >= 60:
-        st.success(f"📈 **HOLD** - Sinyal BUY, masih aman. Cut loss di {Rp{stop_loss_price:,.0f}}")
+        st.success(f"📈 HOLD - Sinyal BUY, masih aman. Cut loss di Rp{stop_loss_price:,.0f}")
     elif score <= 40:
-        st.warning(f"⚠️ **PERTIMBANGKAN CUT** - Sinyal bearish, harga bisa turun lebih jauh")
+        st.warning(f"⚠️ PERTIMBANGKAN CUT - Sinyal bearish, harga bisa turun lebih jauh")
     elif pnl_percent > 0:
-        st.info(f"✅ **HOLD DULU** - Masih profit {pnl_percent:.2f}%, pantau support di {Rp{last['support']:,.0f}")
+        st.info(f"✅ HOLD DULU - Masih profit {pnl_percent:.2f}%, pantau support di Rp{last['support']:,.0f}")
     else:
-        st.info(f"⏸️ **TUNGGU** - Belum ada sinyal jelas. Stop loss di {Rp{stop_loss_price:,.0f}}")
+        st.info(f"⏸️ TUNGGU - Belum ada sinyal jelas. Stop loss di Rp{stop_loss_price:,.0f}")
 
 else:
-    st.info("💡 **Masukkan Harga Entry di sidebar kiri** untuk mengaktifkan Position Management (Stop Loss & Take Profit)")
+    st.info("💡 Masukkan Harga Entry di sidebar kiri untuk mengaktifkan Position Management (Stop Loss & Take Profit)")
 
 # ========== MULTI TIMEFRAME ==========
 st.markdown("---")
