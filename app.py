@@ -28,32 +28,28 @@ from data import (
     get_nearest_order_block
 )
 
+# ========== PAGE CONFIG (WAJIB PERTAMA) ==========
+st.set_page_config(
+    page_title="Smart Money Trading System",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # ========== AUTENTIKASI PASSWORD ==========
 def check_password():
-    """Mengembalikan True jika user sudah login."""
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
         return True
 
-    # Tampilkan form login
     st.title("🔐 Smart Money Trading System")
     st.markdown("Silakan masukkan password untuk mengakses aplikasi.")
-
-    # Gunakan st.secrets untuk keamanan (Streamlit Cloud)
-    # Atau hardcode sementara untuk testing lokal (GANTI dengan password Anda)
-    # Untuk menggunakan st.secrets, buat file .streamlit/secrets.toml dengan isi:
-    # password = "rahasiakamu"
-    # Lalu aktifkan baris di bawah dan hapus baris hardcode.
-
-    # === HARDCODE SEMENTARA (GANTI DENGAN PASSWORD ANDA) ===
-    correct_password = "kuntul123"   # <-- GANTI INI
-    # ===================================================
-
-    # Alternatif menggunakan st.secrets (Lebih aman untuk deployment)
-    # correct_password = st.secrets["password"]
-
+    
+    # Ambil password dari Streamlit secrets (harus sudah diatur di dashboard)
+    correct_password = st.secrets["password"]
+    
     password = st.text_input("Password", type="password")
     if st.button("Login"):
         if password == correct_password:
@@ -63,17 +59,9 @@ def check_password():
             st.error("❌ Password salah!")
     return False
 
-# Jalankan cek password di awal
+# Jalankan autentikasi
 if not check_password():
-    st.stop()  # Hentikan eksekusi jika belum login
-
-# ========== SET PAGE CONFIG (harus sebelum komponen lain) ==========
-st.set_page_config(
-    page_title="Smart Money Trading System",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+    st.stop()  # Hentikan jika belum login
 
 # ========== SIDEBAR ==========
 with st.sidebar:
@@ -81,7 +69,6 @@ with st.sidebar:
     st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
     st.markdown("---")
     
-    # DEFAULT IHSG
     symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "IHSG").upper()
     timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
     
@@ -137,7 +124,7 @@ support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
 atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 0
 if pd.isna(atr): atr = last['close'] * 0.02
 
-# === PRIORITY FILTER (OTOMATIS) ===
+# === PRIORITY FILTER ===
 skip_reason = None
 action = "SKIP"
 action_color = "red"
@@ -271,7 +258,7 @@ with col_sr4:
 
 st.markdown("---")
 
-# === ENTRY, SL, TP DARI INDIKATOR ===
+# === ENTRY, SL, TP ===
 st.markdown("### 🎯 Entry - Stop Loss - Take Profit (Dari Indikator)")
 if entry:
     if "BUY" in setup:
@@ -302,7 +289,7 @@ else:
 
 st.markdown("---")
 
-# === TARGET HARGA ALTERNATIF (3 LEVEL) ===
+# === TARGET ALTERNATIF ===
 if entry and atr > 0:
     st.markdown("### 🎯 Target Harga Alternatif")
     target1 = entry + (1.5 * atr)
