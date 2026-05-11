@@ -34,7 +34,7 @@ with st.sidebar:
     st.markdown("---")
     
     symbol = st.text_input("Kode Saham", "^JKSE", key="symbol_input").upper()
-    timeframe = st.selectbox("Timeframe", ["1d", "1h"], key="timeframe_select")
+    timeframe = st.selectbox("Timeframe", ["5m", "15m", "30m", "60m", "1d"], key="timeframe_select")
     
     st.markdown("---")
     st.subheader("⚙️ RISK MANAGEMENT")
@@ -224,28 +224,74 @@ st.markdown("---")
 st.markdown("### 📝 REKOMENDASI")
 st.info(get_trading_recommendation(df))
 
-# ========== MULTI TIMEFRAME ==========
+# ========== MULTI TIMEFRAME 5 TIMEFRAME ==========
 st.markdown("---")
-st.markdown("### ⏰ Multi Timeframe")
-mtf = multi_timeframe_analysis(symbol)
-col_tf = st.columns(2)
-for i, tf in enumerate(["1h", "1d"]):
-    with col_tf[i]:
-        score = mtf.get(tf, 50)
-        if score >= 70:
-            st.success(f"**{tf}**: {score:.0f}")
-        elif score >= 50:
-            st.warning(f"**{tf}**: {score:.0f}")
-        else:
-            st.error(f"**{tf}**: {score:.0f}")
+st.markdown("### ⏰ Multi Timeframe (5 Timeframe)")
 
-final = mtf.get('weighted', 50)
-if final >= 70:
-    st.success(f"🎯 Final Signal: BUY ({final:.0f})")
-elif final >= 50:
-    st.warning(f"⏸️ Final Signal: NEUTRAL ({final:.0f})")
+mtf = multi_timeframe_analysis(symbol)
+
+col_tf1, col_tf2, col_tf3, col_tf4, col_tf5 = st.columns(5)
+
+with col_tf1:
+    score = mtf.get("5m", 50)
+    if score >= 65:
+        st.success(f"**5m**\n{score:.0f}")
+    elif score >= 45:
+        st.warning(f"**5m**\n{score:.0f}")
+    else:
+        st.error(f"**5m**\n{score:.0f}")
+
+with col_tf2:
+    score = mtf.get("15m", 50)
+    if score >= 65:
+        st.success(f"**15m**\n{score:.0f}")
+    elif score >= 45:
+        st.warning(f"**15m**\n{score:.0f}")
+    else:
+        st.error(f"**15m**\n{score:.0f}")
+
+with col_tf3:
+    score = mtf.get("30m", 50)
+    if score >= 65:
+        st.success(f"**30m**\n{score:.0f}")
+    elif score >= 45:
+        st.warning(f"**30m**\n{score:.0f}")
+    else:
+        st.error(f"**30m**\n{score:.0f}")
+
+with col_tf4:
+    score = mtf.get("60m", 50)
+    if score >= 65:
+        st.success(f"**1 Jam**\n{score:.0f}")
+    elif score >= 45:
+        st.warning(f"**1 Jam**\n{score:.0f}")
+    else:
+        st.error(f"**1 Jam**\n{score:.0f}")
+
+with col_tf5:
+    score = mtf.get("1d", 50)
+    if score >= 65:
+        st.success(f"**1 Hari**\n{score:.0f}")
+    elif score >= 45:
+        st.warning(f"**1 Hari**\n{score:.0f}")
+    else:
+        st.error(f"**1 Hari**\n{score:.0f}")
+
+# Final Weighted Score
+final_score = mtf.get("weighted", 50)
+
+st.markdown("---")
+st.markdown("### 🎯 FINAL MULTI TIMEFRAME SIGNAL")
+
+if final_score >= 70:
+    st.success(f"### ✅ BULLISH - Semua timeframe mendukung uptrend")
+    st.progress(final_score/100, text=f"Score: {final_score:.0f}/100")
+elif final_score >= 50:
+    st.warning(f"### ⏸️ NEUTRAL - Timeframe mixed, perlu konfirmasi")
+    st.progress(final_score/100, text=f"Score: {final_score:.0f}/100")
 else:
-    st.error(f"🔴 Final Signal: SELL ({final:.0f})")
+    st.error(f"### ❌ BEARISH - Timeframe menunjukkan downtrend")
+    st.progress(final_score/100, text=f"Score: {final_score:.0f}/100")
 
 # ========== BACKTEST ==========
 st.markdown("---")
