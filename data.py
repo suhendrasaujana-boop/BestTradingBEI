@@ -61,36 +61,30 @@ def add_indicators(df):
         return df
     df = df.copy()
     
-    # EMA
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # MACD
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
     
-    # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
     
-    # ATR (Average True Range) - untuk stop loss dinamis
     high_low = df['high'] - df['low']
     high_close = abs(df['high'] - df['close'].shift())
     low_close = abs(df['low'] - df['close'].shift())
     df['tr'] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     
-    # ADX
     plus_dm = df['high'].diff()
     minus_dm = df['low'].diff()
     plus_dm[plus_dm < 0] = 0
@@ -101,7 +95,6 @@ def add_indicators(df):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df['adx'] = dx.rolling(window=14).mean()
     
-    # Support & Resistance (dynamic)
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
@@ -131,6 +124,15 @@ def get_ihsg_trend():
         return trend, score, f"IHSG {trend} ({daily_change:+.1f}%)"
     except:
         return "NEUTRAL", 50, "IHSG data unavailable"
+
+def get_ihsg_filter_penalty():
+    trend, score, msg = get_ihsg_trend()
+    if trend == "BEARISH":
+        return -20, f"IHSG Bearish! Turunkan ekspektasi"
+    elif trend == "SIDEWAYS":
+        return -10, f"IHSG Sideways, selektif"
+    else:
+        return 0, f"IHSG Bullish mendukung"
 
 def detect_bottom_pattern(df):
     if df.empty or len(df) < 30:
@@ -259,19 +261,15 @@ def detect_reversal(df):
         return reversal_type, min(100, confidence), desc
     return "NONE", confidence, desc
 
-# ========== FUNGSI UTAMA: HITUNG ENTRY, SL, TP DARI INDIKATOR ==========
+# ========== FUNGSI UTAMA ==========
 def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
-    """
-    Menghitung ENTRY, STOP LOSS, TAKE PROFIT dari INDIKATOR
-    BUKAN dari input manual!
-    """
+    """Menghitung ENTRY, SL, TP dari INDIKATOR"""
     if df.empty or len(df) < 30:
         return None, None, None, 0, 0, "NO_SETUP", 0
     
     last = df.iloc[-1]
     atr = last.get('atr', last['close'] * 0.02)
     
-    # Deteksi setup
     is_bottom, bottom_conf, _ = detect_bottom_pattern(df)
     is_breakout, breakout_type, breakout_conf, breakout_desc, resistance = detect_valid_breakout(df)
     reversal_type, reversal_conf, _ = detect_reversal(df)
@@ -281,32 +279,26 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     volume_spike = last['volume_ratio'] >= 1.5
     strong_trend = last['adx'] >= 25
     
-    # Default values
     entry_price = None
     stop_loss = None
     take_profit = None
     setup_name = "NO_SETUP"
     confidence = 0
     
-    # ========== PRIORITY 1: BREAKOUT BUY ==========
     if is_breakout and breakout_type in ["STRONG_BREAKOUT", "VALID_BREAKOUT"] and momentum_bullish:
-        # Entry di resistance + 0.2% buffer
         entry_price = resistance * 1.002
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
-        setup_name = f"BREAKOUT_BUY_{breakout_type}"
+        setup_name = f"BREAKOUT_BUY"
         confidence = breakout_conf
     
-    # ========== PRIORITY 2: BOTTOM + REVERSAL BUY ==========
     elif is_bottom and reversal_type == "BULLISH" and bottom_conf >= 50:
-        # Entry di harga saat ini + 0.1%
         entry_price = last['close'] * 1.001
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "BOTTOM_REVERSAL_BUY"
         confidence = bottom_conf
     
-    # ========== PRIORITY 3: REVERSAL BUY ==========
     elif reversal_type == "BULLISH" and reversal_conf >= 60:
         entry_price = last['close'] * 1.001
         stop_loss = entry_price - (2 * atr)
@@ -314,59 +306,25 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "REVERSAL_BUY"
         confidence = reversal_conf
     
-    # ========== PRIORITY 4: TREND BUY ==========
     elif trend_up and strong_trend and momentum_bullish and volume_spike:
-        # Entry di harga saat ini
         entry_price = last['close']
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "TREND_BUY"
         confidence = 70
     
-    # ========== PULLBACK BUY (harga mendekati EMA20) ==========
-    elif trend_up and abs(last['close'] - last['ema20']) / last['ema20'] < 0.02:
-        entry_price = last['ema20']
-        stop_loss = entry_price - (2 * atr)
-        take_profit = entry_price + (3 * atr)
-        setup_name = "PULLBACK_BUY"
-        confidence = 65
-    
-    # ========== BEARISH SIGNALS ==========
-    elif reversal_type == "BEARISH" and reversal_conf >= 60:
-        entry_price = last['close']
-        stop_loss = entry_price + (2 * atr)  # Short: SL di atas
-        take_profit = entry_price - (3 * atr)  # Short: TP di bawah
-        setup_name = "REVERSAL_SELL"
-        confidence = reversal_conf
-    
-    elif not trend_up and strong_trend and not momentum_bullish:
-        entry_price = last['close']
-        stop_loss = entry_price + (2 * atr)
-        take_profit = entry_price - (3 * atr)
-        setup_name = "TREND_SELL"
-        confidence = 70
-    
-    # ========== NO SETUP ==========
     else:
         return None, None, None, 0, 0, "NO_SETUP", 0
     
-    # Hitung Risk Reward
-    if entry_price and stop_loss and take_profit:
-        if setup_name in ["TREND_SELL", "REVERSAL_SELL"]:
-            risk = abs(stop_loss - entry_price)
-            reward = abs(entry_price - take_profit)
-        else:
-            risk = abs(entry_price - stop_loss)
-            reward = abs(take_profit - entry_price)
-        
+    if entry_price:
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
-        # Hitung position sizing
         risk_amount = capital * (risk_percent / 100)
         risk_per_share = risk
         shares = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
         
-        # Max 50% modal
         max_shares = int((capital * 0.5) / entry_price)
         shares = min(shares, max_shares)
         
@@ -378,32 +336,17 @@ def detect_high_quality_setup(df):
     if df.empty or len(df) < 50:
         return "NO_SETUP", 0, "Data tidak cukup"
     
-    is_bottom, bottom_conf, _ = detect_bottom_pattern(df)
-    is_breakout, breakout_type, breakout_conf, breakout_desc, _ = detect_valid_breakout(df)
-    reversal_type, reversal_conf, _ = detect_reversal(df)
+    entry, sl, tp, shares, rr, setup, conf = calculate_entry_sl_tp(df)
     
-    last = df.iloc[-1]
-    trend_up = last['ema20'] > last['ema50']
-    momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
-    volume_spike = last['volume_ratio'] >= 1.5
-    strong_trend = last['adx'] >= 25
+    if entry:
+        if conf >= 80:
+            return f"{setup}_SNIPER", conf, "Sniper setup - eksekusi"
+        elif conf >= 65:
+            return f"{setup}_HIGH", conf, "High quality - bisa eksekusi"
+        else:
+            return setup, conf, "Setup medium - tunggu konfirmasi"
     
-    no_trade = (last['adx'] < 20) or (45 < last['rsi'] < 55 and not volume_spike)
-    if no_trade:
-        return "NO_TRADE_ZONE", 0, "Sideways - hindari trading"
-    
-    if is_breakout and breakout_type == "STRONG_BREAKOUT" and momentum_bullish:
-        return "STRONG_BREAKOUT_BUY", 90, breakout_desc
-    if is_breakout and breakout_type == "VALID_BREAKOUT":
-        return "BREAKOUT_BUY", 75, breakout_desc
-    if is_bottom and reversal_type == "BULLISH":
-        return "BOTTOM_REVERSAL_BUY", 85, "Bottom + Reversal"
-    if reversal_type == "BULLISH":
-        return "REVERSAL_BUY", 80, "Bullish reversal"
-    if trend_up and strong_trend and momentum_bullish and volume_spike:
-        return "TREND_BUY", 70, "Strong uptrend"
-    
-    return "NO_SETUP", 0, "Tidak ada setup berkualitas"
+    return "NO_SETUP", 0, "Tidak ada setup"
 
 def calculate_confidence_score(df, ihsg_score=50):
     if df.empty or len(df) < 30:
@@ -461,7 +404,6 @@ def calculate_confidence_score(df, ihsg_score=50):
     return final, factors, grade
 
 def multi_timeframe_analysis(symbol, capital=100000000, risk_percent=2):
-    """Analisis 5 timeframe dengan entry, SL, TP masing-masing"""
     timeframes = ["5m", "15m", "30m", "60m", "1d"]
     results = {}
     
@@ -471,8 +413,6 @@ def multi_timeframe_analysis(symbol, capital=100000000, risk_percent=2):
             if not df.empty and len(df) > 30:
                 df = add_indicators(df)
                 score, _, _ = calculate_confidence_score(df)
-                
-                # Hitung entry, SL, TP untuk timeframe ini
                 entry, sl, tp, shares, rr, setup, conf = calculate_entry_sl_tp(df, capital, risk_percent)
                 
                 results[tf] = {
@@ -488,10 +428,8 @@ def multi_timeframe_analysis(symbol, capital=100000000, risk_percent=2):
                 results[tf] = {"score": 50, "entry": None, "stop_loss": None, "take_profit": None, "rr": 0, "setup": "NO_DATA", "confidence": 0}
             time.sleep(0.5)
         except Exception as e:
-            print(f"Error {tf}: {e}")
             results[tf] = {"score": 50, "entry": None, "stop_loss": None, "take_profit": None, "rr": 0, "setup": "ERROR", "confidence": 0}
     
-    # Bobot untuk final score
     weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "60m": 0.25, "1d": 0.45}
     weighted = sum(results[tf]["score"] * weights.get(tf, 0.2) for tf in timeframes)
     
@@ -508,11 +446,11 @@ def scan_saham():
                 setup, quality, msg = detect_high_quality_setup(df)
                 if quality >= 65:
                     if "BUY" in setup:
-                        signal = "🔥 BUY"
+                        signal = "BUY"
                     elif "SELL" in setup:
-                        signal = "🔴 SELL"
+                        signal = "SELL"
                     else:
-                        signal = "⏸️ HOLD"
+                        signal = "HOLD"
                     results.append({"Kode": stock, "Score": f"{quality:.0f}", "Setup": msg[:25], "Sinyal": signal})
             time.sleep(0.5)
         except:
@@ -523,12 +461,12 @@ def scan_saham():
 def get_trading_recommendation(df):
     setup, quality, msg = detect_high_quality_setup(df)
     if quality >= 85:
-        return f"🎯 {msg} - Sniper eksekusi"
+        return f"Sniper eksekusi - {msg}"
     elif quality >= 70:
-        return f"📈 {msg} - Setup bagus"
+        return f"Setup bagus - {msg}"
     elif quality >= 55:
-        return f"⏸️ {msg} - Tunggu konfirmasi"
-    return f"⛔ {msg} - No trade zone"
+        return f"Tunggu konfirmasi - {msg}"
+    return f"No trade zone - {msg}"
 
 def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
     if df.empty or len(df) < 30:
@@ -541,19 +479,21 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
     trades = []
     peak = initial_capital
     max_dd = 0
+    entry_price_used = 0
+    stop_price = 0
+    take_price = 0
     
     for i in range(20, len(df_test)):
         entry, sl, tp, shares, rr, setup, conf = calculate_entry_sl_tp(df_test.iloc[:i+1], capital, risk_per_trade)
         close = df_test.iloc[i]['close']
         
-        if entry and setup in ["BREAKOUT_BUY_STRONG_BREAKOUT", "BREAKOUT_BUY_VALID_BREAKOUT", "BOTTOM_REVERSAL_BUY", "REVERSAL_BUY", "TREND_BUY", "PULLBACK_BUY"] and position == 0:
+        if entry and "BUY" in setup and position == 0:
             if shares > 0:
-                entry_price = entry * (1 + slippage)
-                cost = shares * entry_price * (1 + fee_buy)
+                entry_price_used = entry * (1 + slippage)
+                cost = shares * entry_price_used * (1 + fee_buy)
                 if cost <= capital:
                     position = shares
                     capital -= cost
-                    entry_price_used = entry_price
                     stop_price = sl
                     take_price = tp
         
