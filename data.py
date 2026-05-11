@@ -71,6 +71,25 @@ def add_indicators(df):
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
+    
+    # ========== ATR (Average True Range) ==========
+    high_low = df['high'] - df['low']
+    high_close = abs(df['high'] - df['close'].shift())
+    low_close = abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['atr'] = tr.rolling(window=14).mean()
+    
+    # ========== ADX (Average Directional Index) untuk Market Regime ==========
+    plus_dm = df['high'].diff()
+    minus_dm = df['low'].diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
+    
+    plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / df['atr'])
+    minus_di = 100 * (abs(minus_dm).ewm(alpha=1/14).mean() / df['atr'])
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    df['adx'] = dx.rolling(window=14).mean()
+    
     return df
 
 def calculate_score(df):
@@ -106,6 +125,97 @@ def get_confidence_level(score):
     elif score >= 30: return ("Rendah", "orange")
     else: return ("Sangat Rendah", "red")
 
+# ========== ATR MARKET REGIME FUNCTION ==========
+def get_market_regime(df):
+    """
+    Menentukan Market Regime berdasarkan ADX dan ATR
+    ADX > 25 = Trending Market (Tren Kuat)
+    ADX 20-25 = Weak Trend (Tren Mulai/Lemah)
+    ADX < 20 = Ranging Market (Sideways - HINDARI TRADING!)
+    ATR Spike > 1.5x MA = High Volatility (Berita Besar - Stop Loss Rentan)
+    """
+    if df.empty or len(df) < 20:
+        return {
+            "regime": "UNKNOWN",
+            "adx": 0,
+            "atr": 0,
+            "atr_ma": 0,
+            "atr_ratio": 0,
+            "color": "gray",
+            "description": "Data tidak cukup untuk analisis",
+            "trading_allowed": True
+        }
+    
+    last = df.iloc[-1]
+    
+    # Ambil ADX
+    adx = last.get('adx', 0)
+    if pd.isna(adx):
+        adx = 0
+    
+    # Hitung ATR dan MA20 ATR
+    atr = last.get('atr', 0)
+    if pd.isna(atr):
+        atr = 0
+    
+    atr_ma = df['atr'].rolling(window=20).mean().iloc[-1] if len(df) >= 20 else atr
+    if pd.isna(atr_ma):
+        atr_ma = atr
+    
+    # Rasio ATR terhadap MA (untuk deteksi spike volatility)
+    atr_ratio = atr / atr_ma if atr_ma > 0 else 1
+    
+    # Determine Market Regime
+    if adx >= 25:
+        if atr_ratio >= 1.5:
+            regime = "TRENDING + HIGH VOLATILITY"
+            color = "orange"
+            description = "⚠️ Tren kuat tapi volatilitas tinggi! Stop loss beresiko tersapu."
+            trading_allowed = True
+        elif atr_ratio >= 1.2:
+            regime = "TRENDING + MODERATE VOLATILITY"
+            color = "#87CEEB"
+            description = "✅ Tren sehat, sinyal bisa dipercaya. Gunakan trailing stop."
+            trading_allowed = True
+        else:
+            regime = "STRONG TRENDING"
+            color = "green"
+            description = "✅ Kondisi ideal! Sinyal BUY/SELL sangat valid."
+            trading_allowed = True
+    elif adx >= 20:
+        regime = "WEAK TREND"
+        color = "yellow"
+        description = "⚠️ Tren mulai terbentuk, tapi masih lemah. Konfirmasi tambahan diperlukan."
+        trading_allowed = True
+    elif adx >= 15:
+        regime = "RANGING (Sideways)"
+        color = "orange"
+        description = "⚠️ Pasar sideways! Sebaiknya HOLD/TUNGGU. Sinyal palsu tinggi."
+        trading_allowed = False
+    else:
+        regime = "STRONG RANGING (Sideways Extreme)"
+        color = "red"
+        description = "🔴 PASAR SAMPING! HINDARI TRADING. Sinyal tidak bisa dipercaya."
+        trading_allowed = False
+    
+    # Cek ATR spike ekstrim (berita besar)
+    if atr_ratio >= 2.0 and adx < 25:
+        regime = "EXTREME VOLATILITY (News Event)"
+        color = "red"
+        description = "🔴 Volatilitas melonjak drastis! Harga bisa bergerak liar dua arah. JANGAN TRADING!"
+        trading_allowed = False
+    
+    return {
+        "regime": regime,
+        "adx": round(adx, 1),
+        "atr": round(atr, 0),
+        "atr_ma": round(atr_ma, 0),
+        "atr_ratio": round(atr_ratio, 2),
+        "color": color,
+        "description": description,
+        "trading_allowed": trading_allowed
+    }
+
 def multi_timeframe_analysis(symbol):
     timeframes = ["5m", "15m", "30m", "60m", "1d"]
     scores = {}
@@ -118,7 +228,7 @@ def multi_timeframe_analysis(symbol):
         else:
             scores[tf] = 50
         
-        time.sleep(1)  # Delay biar tidak kena rate limit
+        time.sleep(1)
     
     weights = {"5m": 0.1, "15m": 0.15, "30m": 0.2, "60m": 0.25, "1d": 0.3}
     weighted = sum(scores[tf] * weights.get(tf, 0.2) for tf in timeframes if tf in scores)
@@ -151,11 +261,22 @@ def scan_saham():
     return results
 
 def get_trading_recommendation(score, df):
-    if score >= 70: return "✅ AKSI: BELI AGGRESIF - Semua indikator mendukung uptrend"
-    elif score >= 60: return "📈 AKSI: BELI - Momentum positif, pantau konfirmasi"
-    elif score <= 30: return "❌ AKSI: JUAL AGGRESIF - Semua indikator menunjukkan downtrend"
-    elif score <= 40: return "📉 AKSI: JUAL - Tekanan bearish, cut loss jika perlu"
-    else: return "⏸️ AKSI: HOLD/TUNGGU - Kondisi sideways, tunggu sinyal jelas"
+    # Ambil market regime untuk rekomendasi yang lebih pintar
+    regime = get_market_regime(df)
+    
+    if not regime["trading_allowed"]:
+        return f"⛔ HINDARI TRADING - {regime['description']}"
+    
+    if score >= 70:
+        return "✅ AKSI: BELI AGGRESIF - Semua indikator mendukung uptrend"
+    elif score >= 60:
+        return "📈 AKSI: BELI - Momentum positif, pantau konfirmasi"
+    elif score <= 30:
+        return "❌ AKSI: JUAL AGGRESIF - Semua indikator menunjukkan downtrend"
+    elif score <= 40:
+        return "📉 AKSI: JUAL - Tekanan bearish, cut loss jika perlu"
+    else:
+        return "⏸️ AKSI: HOLD/TUNGGU - Kondisi sideways, tunggu sinyal jelas"
 
 def backtest_strategy(df):
     if df.empty or len(df) < 10:
