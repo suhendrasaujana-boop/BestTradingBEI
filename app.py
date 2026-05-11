@@ -70,6 +70,8 @@ with st.sidebar:
     """)
     st.markdown("---")
     auto_refresh = st.checkbox("Auto Refresh (30 detik)", value=False)
+    if auto_refresh:
+        st.warning("⚠️ Auto refresh aktif - dapat memperlambat sistem karena rate limit Yahoo Finance. Sebaiknya gunakan manual refresh.")
     st.caption(f"Update: {datetime.now().strftime('%H:%M:%S')}")
 
 # ========== MAIN CONTENT ==========
@@ -92,6 +94,7 @@ ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
 entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
 support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
 atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 0
+if pd.isna(atr): atr = last['close'] * 0.02
 
 # === PRIORITY FILTER (OTOMATIS) ===
 skip_reason = None
@@ -102,9 +105,11 @@ recommendation_text = ""
 # 1. IHSG BEARISH
 if ihsg_trend == "BEARISH":
     skip_reason = f"IHSG BEARISH ({ihsg_msg.split('(')[-1].replace(')','')}) → Market tidak mendukung"
-# 2. ADX < 20 (sideways)
-elif last['adx'] < 20:
-    skip_reason = f"ADX {last['adx']:.1f} (<20) → Pasar sideways, sinyal palsu tinggi"
+# 2. ADX < 20 (sideways) - dengan penanganan NaN
+adx_val = last.get('adx', 0)
+if pd.isna(adx_val): adx_val = 0
+if adx_val < 20:
+    skip_reason = f"ADX {adx_val:.1f} (<20) → Pasar sideways, sinyal palsu tinggi"
 # 3. Jika ada sinyal entry
 elif entry and conf >= 70 and rr >= 1.5:
     action = "EKSEKUSI BUY"
@@ -207,9 +212,9 @@ col_r1, col_r2, col_r3 = st.columns(3)
 with col_r1:
     st.metric("Regime", regime)
 with col_r2:
-    st.metric("ADX", f"{last['adx']:.1f}")
+    st.metric("ADX", f"{adx_val:.1f}")
 with col_r3:
-    atr_pct = (last['atr'] / last['close'] * 100) if last['close'] > 0 else 0
+    atr_pct = (atr / current_price * 100) if current_price > 0 else 0
     st.metric("ATR %", f"{atr_pct:.2f}%")
 st.caption(regime_desc)
 
@@ -312,7 +317,7 @@ if entry and sl:
         st.caption(f"• Maksimal kerugian jika kena SL: Rp{risk_amount:,.0f}")
     if ihsg_trend == "BEARISH":
         st.error("⚠️ IHSG BEARISH → Risiko lebih tinggi! Sebaiknya hindari entry baru.")
-    elif last['adx'] < 20:
+    elif adx_val < 20:
         st.warning("⚠️ ADX rendah (<20) → Pasar sideways, stop loss rawan tersapu.")
 else:
     st.info("Tidak ada setup aktif, risiko rendah.")
@@ -336,7 +341,6 @@ st.markdown("---")
 # === REKOMENDASI AKHIR (ACTION & KESIMPULAN) ===
 st.markdown("### 🎯 REKOMENDASI AKHIR")
 
-# Warna latar berdasarkan action
 if action == "EKSEKUSI BUY":
     st.success(f"## ✅ {action}")
 elif action == "TUNGGU KONFIRMASI":
@@ -365,7 +369,9 @@ with st.spinner("Menganalisis multi timeframe..."):
     mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
 
 col_mtf1, col_mtf2, col_mtf3 = st.columns(3)
-for i, (tf_name, tf_data) in enumerate(mtf_results.items()):
+tf_keys = list(mtf_results.keys())
+for i, tf_name in enumerate(tf_keys[:3]):
+    tf_data = mtf_results[tf_name]
     with [col_mtf1, col_mtf2, col_mtf3][i]:
         st.subheader(tf_name.upper())
         st.metric("Direction", tf_data['direction'])
@@ -384,7 +390,7 @@ st.markdown("---")
 
 # === SCANNER ===
 st.markdown("### 🔍 Scanner Saham")
-if st.button("🚀 SCAN MARKET", width="stretch"):
+if st.button("🚀 SCAN MARKET", use_container_width=True):
     with st.spinner("Scanning market..."):
         results = scan_saham()
         if results:
