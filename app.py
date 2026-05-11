@@ -12,7 +12,8 @@ from data import (
     multi_timeframe_analysis,
     scan_saham,
     get_trading_recommendation,
-    backtest_strategy
+    backtest_strategy,
+    get_market_regime  # <--- TAMBAHKAN INI
 )
 
 st.set_page_config(
@@ -33,7 +34,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("⚙️ SMART ENTRY & RISK MANAGEMENT")
     
-    # ========== FITUR ENTRY, STOP LOSS, TAKE PROFIT ==========
     entry_price = st.number_input("💰 HARGA ENTRY (Rp)", min_value=0, value=0, step=100, 
                                    help="Masukkan harga beli Anda")
     
@@ -66,6 +66,54 @@ signal_label, signal_color, signal_emoji = get_signal_label(score)
 confidence_label, confidence_color = get_confidence_level(score)
 last = df.iloc[-1]
 current_price = last['close']
+
+# ========== MARKET REGIME (ATR) - DITAMPILKAN DI ATAS ==========
+st.markdown("---")
+st.subheader("📊 MARKET REGIME (ATR Analysis)")
+
+regime = get_market_regime(df)
+
+# Tampilkan Market Regime dengan warna
+if regime["regime"] == "STRONG TRENDING":
+    regime_bg = "#90EE90"
+elif regime["regime"] == "TRENDING + MODERATE VOLATILITY":
+    regime_bg = "#87CEEB"
+elif regime["regime"] == "TRENDING + HIGH VOLATILITY":
+    regime_bg = "#FFD700"
+elif regime["regime"] == "WEAK TREND":
+    regime_bg = "#FFE4B5"
+else:
+    regime_bg = "#FFCCCC"
+
+col_regime, col_adx, col_atr = st.columns([2, 1, 1])
+
+with col_regime:
+    st.markdown(f"""
+    <div style="background-color:{regime_bg}; padding:10px; border-radius:10px; text-align:center">
+        <h4 style="margin:0">📈 Market Regime</h4>
+        <h3 style="margin:0">{regime['regime']}</h3>
+        <p style="margin:5px 0 0 0">{regime['description']}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_adx:
+    st.metric("📊 ADX (Trend Strength)", f"{regime['adx']}")
+    if regime['adx'] >= 25:
+        st.success("✅ Tren Kuat")
+    elif regime['adx'] >= 20:
+        st.info("⚠️ Tren Mulai")
+    else:
+        st.warning("🔴 Sideways")
+
+with col_atr:
+    st.metric("📉 ATR (Volatility)", f"Rp{regime['atr']:,.0f}")
+    st.caption(f"ATR Ratio: {regime['atr_ratio']}x")
+
+# Peringatan jika trading tidak disarankan
+if not regime["trading_allowed"]:
+    st.error(f"⛔ {regime['description']} Sebaiknya HOLD/TUNGGU, jangan entry baru!")
+
+st.markdown("---")
 
 # ========== HARGA TERTINGGI, TERENDAH, SAAT INI ==========
 st.subheader("💰 Harga")
@@ -188,7 +236,9 @@ if entry_price > 0:
     st.markdown("---")
     st.subheader("📌 REKOMENDASI AKSI")
     
-    if current_price <= stop_loss_price:
+    if not regime["trading_allowed"]:
+        st.warning(f"⛔ MARKET REGIME: {regime['description']} Sebaiknya jangan entry baru!")
+    elif current_price <= stop_loss_price:
         st.error(f"🔴 CUT LOSS! Harga turun {stop_loss_percent}% dari entry (Rp{stop_loss_price:,.0f}). Segera jual!")
     elif current_price >= take_profit_price:
         st.success(f"🟢 TAKE PROFIT! Harga naik {take_profit_percent}% dari entry (Rp{take_profit_price:,.0f}). Ambil untung!")
@@ -275,7 +325,7 @@ if st.button("🚀 Scan Market", width="stretch"):
             st.error(f"Error: {str(e)}")
 
 st.markdown("---")
-st.caption("⚠️ Disclaimer: Alat bantu analisis, bukan rekomendasi investasi. Risk Management ada di sidebar kiri.")
+st.caption("⚠️ Disclaimer: Alat bantu analisis, bukan rekomendasi investasi. Risk Management ada di sidebar kiri. Market Regime membantu menentukan kondisi pasar.")
 
 # Auto Refresh
 if auto_refresh:
