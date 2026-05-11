@@ -28,6 +28,46 @@ from data import (
     get_nearest_order_block
 )
 
+# ========== AUTENTIKASI PASSWORD ==========
+def check_password():
+    """Mengembalikan True jika user sudah login."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    # Tampilkan form login
+    st.title("🔐 Smart Money Trading System")
+    st.markdown("Silakan masukkan password untuk mengakses aplikasi.")
+
+    # Gunakan st.secrets untuk keamanan (Streamlit Cloud)
+    # Atau hardcode sementara untuk testing lokal (GANTI dengan password Anda)
+    # Untuk menggunakan st.secrets, buat file .streamlit/secrets.toml dengan isi:
+    # password = "rahasiakamu"
+    # Lalu aktifkan baris di bawah dan hapus baris hardcode.
+
+    # === HARDCODE SEMENTARA (GANTI DENGAN PASSWORD ANDA) ===
+    correct_password = "admin123"   # <-- GANTI INI
+    # ===================================================
+
+    # Alternatif menggunakan st.secrets (Lebih aman untuk deployment)
+    # correct_password = st.secrets["password"]
+
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if password == correct_password:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("❌ Password salah!")
+    return False
+
+# Jalankan cek password di awal
+if not check_password():
+    st.stop()  # Hentikan eksekusi jika belum login
+
+# ========== SET PAGE CONFIG (harus sebelum komponen lain) ==========
 st.set_page_config(
     page_title="Smart Money Trading System",
     page_icon="🧠",
@@ -41,7 +81,7 @@ with st.sidebar:
     st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
     st.markdown("---")
     
-    # DEFAULT BBCA tanpa .JK, user cukup ketik BBCA, BBRI, dll
+    # DEFAULT IHSG
     symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "IHSG").upper()
     timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
     
