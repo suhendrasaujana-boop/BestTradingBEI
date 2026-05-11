@@ -7,11 +7,13 @@ from data import (
     get_data,
     add_indicators,
     get_ihsg_trend,
-    get_ihsg_filter_penalty,
+    detect_bottom_pattern,
+    detect_valid_breakout,
+    detect_reversal,
     detect_high_quality_setup,
     calculate_risk_reward,
-    calculate_confidence_score,
     calculate_smart_position_size,
+    calculate_confidence_score,
     get_trading_recommendation,
     backtest_strategy,
     multi_timeframe_analysis,
@@ -19,7 +21,7 @@ from data import (
 )
 
 st.set_page_config(
-    page_title="Robot Saham Pro - Quality Setup",
+    page_title="Robot Saham Pro",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -28,11 +30,11 @@ st.set_page_config(
 # SIDEBAR
 with st.sidebar:
     st.title("🎯 Robot Saham Pro")
-    st.caption("Fokus ke Setup Berkualitas, Bukan Banyak Sinyal")
+    st.caption("Fokus ke Setup Berkualitas")
     st.markdown("---")
     
     symbol = st.text_input("Kode Saham", "^JKSE", key="symbol_input").upper()
-    timeframe = st.selectbox("Timeframe", ["1d", "4h", "1h"], key="timeframe_select")
+    timeframe = st.selectbox("Timeframe", ["1d", "1h"], key="timeframe_select")
     
     st.markdown("---")
     st.subheader("⚙️ RISK MANAGEMENT")
@@ -60,30 +62,68 @@ if df.empty:
 df = add_indicators(df)
 current_price = df.iloc[-1]['close']
 
-# ========== MARKET FILTER (IHSG) - KRUSIAL ==========
+# ========== MARKET FILTER ==========
 st.markdown("### 📊 MARKET FILTER (IHSG)")
 ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
-penalty, penalty_msg = get_ihsg_filter_penalty()
+if ihsg_trend == "BULLISH":
+    st.success(f"✅ {ihsg_msg}")
+elif ihsg_trend == "BEARISH":
+    st.error(f"⚠️ {ihsg_msg}")
+else:
+    st.warning(f"📊 {ihsg_msg}")
 
-col_m1, col_m2 = st.columns(2)
-with col_m1:
-    if ihsg_trend == "BULLISH":
-        st.success(f"✅ {ihsg_msg}")
-    elif ihsg_trend == "BEARISH":
-        st.error(f"⚠️ {ihsg_msg}")
-    else:
-        st.warning(f"📊 {ihsg_msg}")
+st.markdown("---")
 
-with col_m2:
-    if penalty < 0:
-        st.warning(penalty_msg)
+# ========== BOTTOM, BREAKOUT, REVERSAL ==========
+st.markdown("### 🔍 BOTTOM, BREAKOUT & REVERSAL")
+
+col_b1, col_b2, col_b3 = st.columns(3)
+
+is_bottom, bottom_conf, bottom_desc = detect_bottom_pattern(df)
+with col_b1:
+    if is_bottom:
+        st.success(f"📍 **BOTTOM**")
+        st.progress(bottom_conf/100, text=f"Keyakinan: {bottom_conf:.0f}%")
+        st.caption(bottom_desc[:35])
     else:
-        st.info(penalty_msg)
+        st.info("📍 **BOTTOM**")
+        st.caption("Tidak ada sinyal bottom")
+
+is_breakout, breakout_type, breakout_conf, breakout_desc = detect_valid_breakout(df)
+with col_b2:
+    if breakout_type == "STRONG_BREAKOUT":
+        st.success(f"🚀 **STRONG BREAKOUT**")
+        st.progress(breakout_conf/100, text=f"Keyakinan: {breakout_conf:.0f}%")
+        st.caption(breakout_desc[:35])
+    elif breakout_type == "VALID_BREAKOUT":
+        st.info(f"📈 **VALID BREAKOUT**")
+        st.progress(breakout_conf/100, text=f"Keyakinan: {breakout_conf:.0f}%")
+        st.caption(breakout_desc[:35])
+    elif breakout_type == "FAKE_BREAKOUT":
+        st.error(f"⚠️ **FAKE BREAKOUT!**")
+        st.caption(breakout_desc[:35])
+    else:
+        st.info("🚀 **BREAKOUT**")
+        st.caption("Tidak ada sinyal breakout")
+
+reversal_type, reversal_conf, reversal_desc = detect_reversal(df)
+with col_b3:
+    if reversal_type == "BULLISH":
+        st.success(f"🔄 **BULLISH REVERSAL**")
+        st.progress(reversal_conf/100, text=f"Keyakinan: {reversal_conf:.0f}%")
+        st.caption(reversal_desc[:35])
+    elif reversal_type == "BEARISH":
+        st.error(f"🔄 **BEARISH REVERSAL**")
+        st.progress(reversal_conf/100, text=f"Keyakinan: {reversal_conf:.0f}%")
+        st.caption(reversal_desc[:35])
+    else:
+        st.info("🔄 **REVERSAL**")
+        st.caption("Tidak ada sinyal reversal")
+
+st.markdown("---")
 
 # ========== HIGH QUALITY SETUP ==========
-st.markdown("---")
-st.markdown("### 🎯 HIGH QUALITY SETUP DETECTOR")
-
+st.markdown("### 🎯 HIGH QUALITY SETUP")
 setup, quality, setup_msg = detect_high_quality_setup(df)
 
 if quality >= 85:
@@ -95,36 +135,24 @@ elif quality >= 55:
     st.info(f"### ⏸️ {setup_msg}")
 else:
     st.warning(f"### ⛔ {setup_msg}")
-    st.info("💡 **No Trade Zone** - Kondisi pasar tidak ideal, lebih baik tidak trading")
 
 # Confidence Score
 confidence, factors, grade = calculate_confidence_score(df, ihsg_score)
 
 col_c1, col_c2 = st.columns(2)
 with col_c1:
-    if grade == "SNIPER":
-        st.metric("Confidence Score", f"{confidence:.0f}", delta="SNIPER SETUP")
-    elif grade == "HIGH":
-        st.metric("Confidence Score", f"{confidence:.0f}", delta="High Quality")
-    elif grade == "NORMAL":
-        st.metric("Confidence Score", f"{confidence:.0f}", delta="Normal")
-    elif grade == "LOW":
-        st.metric("Confidence Score", f"{confidence:.0f}", delta="Low - Skip")
-    else:
-        st.metric("Confidence Score", f"{confidence:.0f}", delta="AVOID")
-
+    st.metric("Confidence Score", f"{confidence:.0f}", delta=grade)
 with col_c2:
-    st.caption("Faktor penilaian:")
     for name, score, desc in factors[:3]:
         if score > 0:
-            st.caption(f"✅ {name}: +{score:.0f} ({desc})")
+            st.caption(f"✅ {name}: +{score:.0f}")
         else:
-            st.caption(f"❌ {name}: {score:.0f} ({desc})")
+            st.caption(f"❌ {name}: {score:.0f}")
 
-# ========== PRICE DISPLAY ==========
 st.markdown("---")
-st.markdown("### 💰 Harga")
 
+# ========== PRICE ==========
+st.markdown("### 💰 Harga")
 last = df.iloc[-1]
 col_p1, col_p2, col_p3 = st.columns(3)
 with col_p1:
@@ -136,105 +164,58 @@ with col_p3:
         change = last['close'] - df.iloc[-2]['close']
         change_pct = (change / df.iloc[-2]['close']) * 100
         st.metric("💰 Current", f"Rp{last['close']:,.0f}", delta=f"{change_pct:+.2f}%")
-    else:
-        st.metric("💰 Current", f"Rp{last['close']:,.0f}")
 
 # ========== CHART ==========
 st.markdown("### 📈 Chart")
 st.line_chart(df[['close', 'ema20', 'ema50']], height=300)
 
-# ========== TECHNICAL INDICATORS ==========
-st.markdown("### 📊 Technical Indicators")
+# ========== INDICATORS ==========
+st.markdown("### 📊 Indicators")
 col_i1, col_i2, col_i3 = st.columns(3)
-
 with col_i1:
-    st.metric("RSI (14)", f"{last['rsi']:.1f}")
-    if last['rsi'] < 30:
-        st.caption("🟢 Oversold - Perhatikan reversal")
-    elif last['rsi'] > 70:
-        st.caption("🔴 Overbought - Hati-hati")
-    
+    st.metric("RSI", f"{last['rsi']:.1f}")
     st.metric("ADX", f"{last['adx']:.1f}")
-    if last['adx'] >= 25:
-        st.caption("✅ Tren Kuat")
-    elif last['adx'] >= 20:
-        st.caption("⚠️ Tren Mulai")
-    else:
-        st.caption("🔴 Sideways - Hindari")
-
 with col_i2:
     st.metric("MACD", f"{last['macd']:.2f}")
-    st.metric("Signal", f"{last['macd_signal']:.2f}", delta=f"{last['macd_histogram']:.2f}")
-    if last['macd_histogram'] > 0:
-        st.caption("✅ Bullish momentum")
-    else:
-        st.caption("❌ Bearish momentum")
-
-with col_i3:
     st.metric("Volume Ratio", f"{last['volume_ratio']:.2f}x")
-    if last['volume_ratio'] >= 1.5:
-        st.success("✅ Volume Spike - Konfirmasi")
-    elif last['volume_ratio'] < 0.6:
-        st.warning("⚠️ Volume Sepi - Hati-hati")
-    
+with col_i3:
     st.metric("ATR", f"Rp{last['atr']:,.0f}")
-    st.caption(f"Volatility: {(last['atr']/last['close']*100):.2f}%")
+    st.metric("Support", f"Rp{last['support']:,.0f}")
+
+st.markdown("---")
 
 # ========== POSITION MANAGEMENT ==========
-st.markdown("---")
 st.markdown("### 📋 POSITION MANAGEMENT")
 
 if entry_price > 0 and capital > 0:
     atr = last.get('atr', last['close'] * 0.02)
-    
-    # ATR-based stop loss (2-3 ATR untuk hindari noise)
     stop_loss = entry_price - (2 * atr)
     take_profit = entry_price + (3 * atr)
     
     col_ps1, col_ps2, col_ps3, col_ps4 = st.columns(4)
-    
     with col_ps1:
-        st.metric("🎯 Entry", f"Rp{entry_price:,.0f}")
-    
+        st.metric("Entry", f"Rp{entry_price:,.0f}")
     with col_ps2:
-        st.metric("✂️ Stop Loss", f"Rp{stop_loss:,.0f}")
+        st.metric("Stop Loss", f"Rp{stop_loss:,.0f}")
         if current_price <= stop_loss:
             st.error("🚨 STOP LOSS!")
-    
     with col_ps3:
-        st.metric("🎯 Take Profit", f"Rp{take_profit:,.0f}")
+        st.metric("Take Profit", f"Rp{take_profit:,.0f}")
         if current_price >= take_profit:
             st.success("🎉 TAKE PROFIT!")
     
-    # Risk Reward
     rr = calculate_risk_reward(entry_price, stop_loss, take_profit)
-    
     with col_ps4:
         st.metric("Risk/Reward", f"1:{rr['ratio']:.1f}")
-        if rr['ratio'] >= 2:
-            st.success(f"✅ {rr['grade']}")
-        elif rr['ratio'] >= 1.5:
-            st.info(f"📊 {rr['grade']}")
-        else:
-            st.error(f"❌ {rr['grade']}")
     
-    # Position sizing
     shares, actual_risk = calculate_smart_position_size(capital, entry_price, stop_loss, risk_percent)
+    st.metric("Position Size", f"{shares:,} saham")
+    st.caption(f"Risk: {actual_risk:.2f}% dari modal")
     
-    col_sz1, col_sz2 = st.columns(2)
-    with col_sz1:
-        st.metric("📊 Position Size", f"{shares:,} saham")
-        st.caption(f"Risk: {actual_risk:.2f}% dari modal")
-    
-    with col_sz2:
-        if rr['ratio'] >= 2 and quality >= 70:
-            st.success("✅ Setup memenuhi kriteria - Eksekusi")
-        else:
-            st.warning("⚠️ Setup tidak memenuhi kriteria - Skip")
-    
-    # RR Recommendation
-    st.info(f"💡 {rr['recommendation']}")
-
+    if rr['ratio'] >= 2 and quality >= 70:
+        st.success("✅ Setup memenuhi kriteria - Eksekusi")
+    else:
+        st.warning("⚠️ Setup belum memenuhi kriteria - Skip")
 else:
     st.info("💡 Masukkan Entry Price dan Modal di sidebar")
 
@@ -245,81 +226,57 @@ st.info(get_trading_recommendation(df))
 
 # ========== MULTI TIMEFRAME ==========
 st.markdown("---")
-st.markdown("### ⏰ Multi Timeframe Confirmation")
-
+st.markdown("### ⏰ Multi Timeframe")
 mtf = multi_timeframe_analysis(symbol)
-col_tf = st.columns(3)
-timeframes = ["1h", "4h", "1d"]
-
-for i, tf in enumerate(timeframes):
+col_tf = st.columns(2)
+for i, tf in enumerate(["1h", "1d"]):
     with col_tf[i]:
         score = mtf.get(tf, 50)
         if score >= 70:
-            st.success(f"**{tf}**\n{score:.0f}")
+            st.success(f"**{tf}**: {score:.0f}")
         elif score >= 50:
-            st.warning(f"**{tf}**\n{score:.0f}")
+            st.warning(f"**{tf}**: {score:.0f}")
         else:
-            st.error(f"**{tf}**\n{score:.0f}")
+            st.error(f"**{tf}**: {score:.0f}")
 
-final_score = mtf.get('weighted', 50)
-if final_score >= 70:
-    st.success(f"🎯 Final Signal: BUY ({final_score:.0f}/100)")
-elif final_score >= 50:
-    st.warning(f"⏸️ Final Signal: NEUTRAL ({final_score:.0f}/100)")
+final = mtf.get('weighted', 50)
+if final >= 70:
+    st.success(f"🎯 Final Signal: BUY ({final:.0f})")
+elif final >= 50:
+    st.warning(f"⏸️ Final Signal: NEUTRAL ({final:.0f})")
 else:
-    st.error(f"🔴 Final Signal: SELL ({final_score:.0f}/100)")
+    st.error(f"🔴 Final Signal: SELL ({final:.0f})")
 
 # ========== BACKTEST ==========
 st.markdown("---")
-with st.expander("📊 Backtest Realistis (Dengan Fee, Slippage, Position Sizing)"):
+with st.expander("📊 Backtest Realistis"):
     if st.button("🚀 Jalankan Backtest", width="stretch"):
-        with st.spinner("Menghitung performa..."):
+        with st.spinner("Menghitung..."):
             result = backtest_strategy(df)
-            
             col_b1, col_b2, col_b3 = st.columns(3)
             with col_b1:
-                st.metric("📈 Return", f"{result['return']}%")
-                st.metric("✅ Winrate", f"{result['winrate']}%")
+                st.metric("Return", f"{result['return']}%")
+                st.metric("Winrate", f"{result['winrate']}%")
             with col_b2:
-                st.metric("📉 Max Drawdown", f"{result['max_drawdown']}%")
-                st.metric("📊 Profit Factor", f"{result['profit_factor']}")
+                st.metric("Max DD", f"{result['max_drawdown']}%")
+                st.metric("Profit Factor", f"{result['profit_factor']}")
             with col_b3:
-                st.metric("🔄 Trades", result['trades'])
-                st.metric("📐 Sharpe Ratio", f"{result['sharpe_ratio']}")
-            
-            st.caption(f"💰 Modal: Rp100jt → Rp{result['final_capital']:,.0f}")
-            
-            # Evaluasi
-            if result['profit_factor'] >= 1.5 and result['max_drawdown'] < 20:
-                st.success("✅ Strategi robust! Profit factor bagus, drawdown terkendali")
-            elif result['profit_factor'] >= 1.2:
-                st.info("📊 Strategi cukup baik, masih bisa dioptimalkan")
-            else:
-                st.warning("⚠️ Strategi perlu perbaikan, profit factor < 1.2")
+                st.metric("Trades", result['trades'])
+            st.caption(f"Modal Rp100jt → Rp{result['final_capital']:,.0f}")
 
 # ========== SCANNER ==========
 st.markdown("---")
-st.markdown("### 🔍 Scanner Saham (Hanya Top 5 Setup Terbaik)")
-
+st.markdown("### 🔍 Scanner Saham")
 if st.button("🚀 SCAN MARKET", width="stretch"):
-    with st.spinner("Scanning saham berkualitas..."):
+    with st.spinner("Scanning..."):
         results = scan_saham()
         if results:
-            df_scan = pd.DataFrame(results)
-            st.dataframe(df_scan, use_container_width=True, hide_index=True)
-            st.caption("💡 Hanya menampilkan setup dengan score >= 65")
+            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
         else:
-            st.warning("Tidak ada setup berkualitas saat ini. Cek lagi nanti.")
+            st.warning("Tidak ada setup berkualitas")
 
 st.markdown("---")
-st.caption("""
-**⚠️ DISCLAIMER & PRINSIP TRADING:**
-1. Fokus ke **setup berkualitas**, bukan banyak sinyal
-2. Minimal **Risk Reward 1:2** sebelum entry
-3. **No Trade Zone** saat market sideways atau volume sepi
-4. Maksimal **2% risk per trade** dari modal
-5. **1-3 setup per minggu** sudah cukup untuk profit konsisten
-""")
+st.caption("⚠️ Disclaimer: Alat bantu analisis, bukan rekomendasi investasi. Fokus ke setup berkualitas, minimal Risk Reward 1:2.")
 
 if auto_refresh:
     time.sleep(30)
