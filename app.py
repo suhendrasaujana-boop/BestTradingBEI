@@ -8,6 +8,9 @@ from data import (
     get_data,
     add_indicators,
     get_ihsg_trend,
+    detect_bottom_pattern,
+    detect_valid_breakout,
+    detect_reversal,
     detect_market_structure,
     detect_smart_money_volume,
     detect_liquidity_sweep,
@@ -72,7 +75,7 @@ df = add_indicators(df)
 last = df.iloc[-1]
 current_price = last['close']
 
-# ========== MARKET FILTER IHSG ==========
+# MARKET FILTER IHSG
 st.markdown("### 📊 Market Filter")
 ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
 if ihsg_trend == "BULLISH":
@@ -84,12 +87,11 @@ else:
 
 st.markdown("---")
 
-# ========== 4 KOLOM UTAMA ==========
+# SMART MONEY DETECTION (4 KOLOM)
 st.markdown("### 🔍 Smart Money Detection")
 
 col1, col2, col3, col4 = st.columns(4)
 
-# Market Structure
 structure, struct_conf, struct_desc = detect_market_structure(df)
 with col1:
     if "BULLISH" in structure:
@@ -99,9 +101,7 @@ with col1:
     else:
         st.info(f"**Market Structure**\n{structure}")
     st.caption(f"Keyakinan: {struct_conf:.0f}%")
-    st.caption(struct_desc[:40])
 
-# Smart Money Volume
 sm, sm_conf, sm_desc = detect_smart_money_volume(df)
 with col2:
     if sm == "ACCUMULATION":
@@ -111,9 +111,7 @@ with col2:
     else:
         st.info(f"**Smart Money**\n{sm}")
     st.caption(f"Keyakinan: {sm_conf:.0f}%")
-    st.caption(sm_desc[:40])
 
-# Liquidity Sweep
 is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
 with col3:
     if sweep_type == "BULLISH_SFP":
@@ -125,9 +123,7 @@ with col3:
     else:
         st.info(f"**Liquidity Sweep**\nTidak ada")
     st.caption(f"Keyakinan: {sweep_conf:.0f}%")
-    st.caption(sweep_desc[:40])
 
-# Candlestick Pattern
 pattern, pattern_conf, pattern_desc = detect_candlestick_pattern(df)
 with col4:
     if "BULLISH" in pattern:
@@ -136,17 +132,17 @@ with col4:
         st.error(f"**Candlestick**\n{pattern}")
     else:
         st.info(f"**Candlestick**\n{pattern}")
-    st.caption(pattern_desc[:40])
+    st.caption(pattern_desc[:40] if pattern_desc else "-")
 
 st.markdown("---")
 
-# ========== MARKET REGIME ==========
+# MARKET REGIME
 st.markdown("### 📈 Market Regime")
 regime, regime_conf, regime_desc = detect_market_regime(df)
 
 col_r1, col_r2, col_r3 = st.columns(3)
 with col_r1:
-    st.metric("Regime", regime, delta=f"Confidence {regime_conf:.0f}%")
+    st.metric("Regime", regime)
 with col_r2:
     st.metric("ADX", f"{last['adx']:.1f}")
 with col_r3:
@@ -156,27 +152,23 @@ st.caption(regime_desc)
 
 st.markdown("---")
 
-# ========== PIVOT SUPPORT & RESISTANCE ==========
+# PIVOT SUPPORT RESISTANCE
 st.markdown("### 📊 Pivot Support & Resistance")
 support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
 
 col_sr1, col_sr2, col_sr3, col_sr4 = st.columns(4)
 with col_sr1:
     st.metric("Support", f"Rp{support:,.0f}")
-    st.metric("S1", f"Rp{s1:,.0f}")
 with col_sr2:
     st.metric("Resistance", f"Rp{resistance:,.0f}")
-    st.metric("R1", f"Rp{r1:,.0f}")
 with col_sr3:
     st.metric("Pivot", f"Rp{pivot:,.0f}")
-    st.metric("R2", f"Rp{r2:,.0f}")
 with col_sr4:
-    st.metric("Fib 38.2%", f"Rp{fib_382:,.0f}")
     st.metric("Fib 61.8%", f"Rp{fib_618:,.0f}")
 
 st.markdown("---")
 
-# ========== ENTRY, SL, TP DARI INDIKATOR ==========
+# ENTRY, SL, TP DARI INDIKATOR
 st.markdown("### 🎯 Entry - Stop Loss - Take Profit (Dari Indikator)")
 
 entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
@@ -203,7 +195,8 @@ if entry:
     with col_ps3:
         st.metric("Confidence", f"{conf:.0f}/100")
     
-    st.caption(" | ".join(signals))
+    if signals:
+        st.caption(" | ".join(signals[:3]))
     
     if conf >= 70 and rr >= 1.5:
         st.success("✅ REKOMENDASI: EKSEKUSI")
@@ -216,7 +209,7 @@ else:
 
 st.markdown("---")
 
-# ========== CONFIDENCE SCORE ==========
+# CONFIDENCE SCORE
 st.markdown("### 📊 Confidence Score")
 confidence, factors, grade = calculate_confidence_score(df, ihsg_score)
 
@@ -224,7 +217,7 @@ col_conf1, col_conf2 = st.columns([1, 2])
 with col_conf1:
     st.metric("Total Score", f"{confidence:.0f}", delta=grade)
 with col_conf2:
-    for name, score, desc in factors[:5]:
+    for name, score, desc in factors[:4]:
         if score > 0:
             st.caption(f"✅ {name}: +{score:.0f} ({desc})")
         else:
@@ -232,9 +225,26 @@ with col_conf2:
 
 st.markdown("---")
 
-# ========== MULTI TIMEFRAME ALIGNMENT ==========
+# HARGA & CHART
+st.markdown("### 💰 Harga")
+col_h1, col_h2, col_h3 = st.columns(3)
+with col_h1:
+    st.metric("High", f"Rp{last['high']:,.0f}")
+with col_h2:
+    st.metric("Low", f"Rp{last['low']:,.0f}")
+with col_h3:
+    if len(df) > 1:
+        change = last['close'] - df.iloc[-2]['close']
+        change_pct = (change / df.iloc[-2]['close']) * 100 if df.iloc[-2]['close'] > 0 else 0
+        st.metric("Current", f"Rp{last['close']:,.0f}", delta=f"{change_pct:+.2f}%")
+
+st.markdown("### 📈 Chart")
+st.line_chart(df[['close', 'ema20', 'ema50']], height=300)
+
+st.markdown("---")
+
+# MULTI TIMEFRAME ALIGNMENT
 st.markdown("### ⏰ Multi Timeframe Alignment")
-st.caption("Daily (trend utama) → 1 Hour (setup) → 15m (entry timing)")
 
 with st.spinner("Menganalisis multi timeframe..."):
     mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
@@ -245,13 +255,10 @@ for i, (tf_name, tf_data) in enumerate(mtf_results.items()):
     with [col_mtf1, col_mtf2, col_mtf3][i]:
         st.subheader(tf_name.upper())
         st.metric("Direction", tf_data['direction'])
-        st.metric("Regime", tf_data['regime'][:10])
         if tf_data['entry']:
             st.caption(f"Entry: Rp{tf_data['entry']:,.0f}")
             st.caption(f"SL: Rp{tf_data['stop_loss']:,.0f}")
-            st.caption(f"TP: Rp{tf_data['take_profit']:,.0f}")
 
-st.markdown("---")
 if alignment_score >= 80:
     st.success(f"### ✅ {alignment} - Semua timeframe searah! (Score: {alignment_score})")
 elif alignment_score >= 60:
@@ -259,78 +266,27 @@ elif alignment_score >= 60:
 else:
     st.warning(f"### ⚠️ {alignment} - Timeframe kontradiksi (Score: {alignment_score})")
 
-st.caption(" | ".join(mtf_signals))
-
 st.markdown("---")
 
-# ========== HARGA & CHART ==========
-st.markdown("### 💰 Harga Real-time")
-col_h1, col_h2, col_h3 = st.columns(3)
-with col_h1:
-    st.metric("High", f"Rp{last['high']:,.0f}")
-with col_h2:
-    st.metric("Low", f"Rp{last['low']:,.0f}")
-with col_h3:
-    if len(df) > 1:
-        change = last['close'] - df.iloc[-2]['close']
-        change_pct = (change / df.iloc[-2]['close']) * 100
-        st.metric("Current", f"Rp{last['close']:,.0f}", delta=f"{change_pct:+.2f}%")
-    else:
-        st.metric("Current", f"Rp{last['close']:,.0f}")
-
-st.markdown("### 📈 Chart")
-st.line_chart(df[['close', 'ema20', 'ema50']], height=300)
-
-# ========== REKOMENDASI ==========
-st.markdown("---")
+# REKOMENDASI
 st.markdown("### 📝 Final Recommendation")
 st.info(get_trading_recommendation(df))
 
-# ========== BACKTEST ==========
 st.markdown("---")
-with st.expander("📊 Advanced Backtest (Sharpe, Expectancy, Equity Curve)"):
-    if st.button("🚀 Jalankan Backtest", width="stretch"):
-        with st.spinner("Menghitung performa..."):
-            result = backtest_strategy(df, capital, risk_percent)
-            
-            col_b1, col_b2, col_b3 = st.columns(3)
-            with col_b1:
-                st.metric("Return", f"{result['return']}%")
-                st.metric("Winrate", f"{result['winrate']}%")
-            with col_b2:
-                st.metric("Max DD", f"{result['max_drawdown']}%")
-                st.metric("Profit Factor", f"{result['profit_factor']}")
-            with col_b3:
-                st.metric("Sharpe Ratio", f"{result['sharpe_ratio']}")
-                st.metric("Expectancy", f"Rp{result['expectancy']:,.0f}")
-            
-            st.metric("Total Trades", result['trades'])
-            st.caption(f"Modal Rp100jt → Rp{result['final_capital']:,.0f}")
-            
-            if result['equity_curve'] and len(result['equity_curve']) > 1:
-                st.subheader("Equity Curve")
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(result['equity_curve'])
-                ax.set_title("Equity Curve")
-                ax.set_ylabel("Modal (Rp)")
-                ax.set_xlabel("Trade")
-                st.pyplot(fig)
 
-# ========== SCANNER ==========
-st.markdown("---")
-st.markdown("### 🔍 Scanner Saham (Smart Money Detection)")
+# SCANNER
+st.markdown("### 🔍 Scanner Saham")
 if st.button("🚀 SCAN MARKET", width="stretch"):
-    with st.spinner("Scanning market untuk smart money setup..."):
+    with st.spinner("Scanning market..."):
         results = scan_saham()
         if results:
             df_scan = pd.DataFrame(results)
             st.dataframe(df_scan, use_container_width=True, hide_index=True)
-            st.success(f"🏆 Top Pick: {results[0]['Kode']} (Score: {results[0]['Score']})")
         else:
-            st.warning("Tidak ada setup smart money saat ini")
+            st.warning("Tidak ada setup berkualitas")
 
 st.markdown("---")
-st.caption("⚠️ DISCLAIMER: Sistem berbasis Market Structure & Smart Money. Entry, SL, TP dihitung dari indikator. Bukan rekomendasi investasi.")
+st.caption("⚠️ DISCLAIMER: Sistem berbasis Market Structure & Smart Money. Bukan rekomendasi investasi.")
 
 if auto_refresh:
     time.sleep(30)
