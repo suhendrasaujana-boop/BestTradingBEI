@@ -41,7 +41,8 @@ with st.sidebar:
     st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
     st.markdown("---")
     
-    symbol = st.text_input("Kode Saham", "BBCA.JK").upper()
+    # DEFAULT BBCA tanpa .JK, user cukup ketik BBCA, BBRI, dll
+    symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "BBCA").upper()
     timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
     
     st.markdown("---")
@@ -80,7 +81,7 @@ st.title(f"🧠 {symbol} - Smart Money Analysis")
 df = get_data(symbol, timeframe)
 
 if df.empty:
-    st.warning(f"Data {symbol} kosong. Coba: BBCA.JK, BBRI.JK, BMRI.JK, ASII.JK")
+    st.warning(f"Data {symbol} kosong. Coba: BBCA, BBRI, BMRI, ASII, atau IHSG.")
     st.stop()
 
 df = add_indicators(df)
@@ -102,15 +103,12 @@ action = "SKIP"
 action_color = "red"
 recommendation_text = ""
 
-# 1. IHSG BEARISH
 if ihsg_trend == "BEARISH":
     skip_reason = f"IHSG BEARISH ({ihsg_msg.split('(')[-1].replace(')','')}) → Market tidak mendukung"
-# 2. ADX < 20 (sideways) - dengan penanganan NaN
 adx_val = last.get('adx', 0)
 if pd.isna(adx_val): adx_val = 0
 if adx_val < 20:
     skip_reason = f"ADX {adx_val:.1f} (<20) → Pasar sideways, sinyal palsu tinggi"
-# 3. Jika ada sinyal entry
 elif entry and conf >= 70 and rr >= 1.5:
     action = "EKSEKUSI BUY"
     action_color = "green"
@@ -128,7 +126,6 @@ else:
     action_color = "red"
     recommendation_text = "Tidak ada setup berkualitas"
 
-# Jika skip_reason ada, override action menjadi SKIP
 if skip_reason:
     action = "SKIP"
     action_color = "red"
@@ -268,9 +265,9 @@ st.markdown("---")
 # === TARGET HARGA ALTERNATIF (3 LEVEL) ===
 if entry and atr > 0:
     st.markdown("### 🎯 Target Harga Alternatif")
-    target1 = entry + (1.5 * atr)   # RR 1:1.5
-    target2 = entry + (2 * atr)     # RR 1:2
-    target3 = entry + (3 * atr)     # RR 1:3 (sudah ada di TP utama)
+    target1 = entry + (1.5 * atr)
+    target2 = entry + (2 * atr)
+    target3 = entry + (3 * atr)
     col_t1, col_t2, col_t3 = st.columns(3)
     with col_t1:
         st.metric("Target 1 (Konservatif)", f"Rp{target1:,.0f}", delta="RR 1:1.5")
@@ -279,7 +276,7 @@ if entry and atr > 0:
     with col_t3:
         st.metric("Target 3 (Agresif)", f"Rp{target3:,.0f}", delta="RR 1:3")
 
-# === STATUS POSISI (jika sudah punya) ===
+# === STATUS POSISI ===
 if has_position and entry_price_manual > 0 and shares_manual > 0:
     st.markdown("---")
     st.markdown("### 📋 Status Posisi Anda")
@@ -296,7 +293,6 @@ if has_position and entry_price_manual > 0 and shares_manual > 0:
         else:
             st.metric("Profit/Loss", f"{pnl_percent:.2f}%", delta=f"-Rp{abs(pnl_nominal):,.0f}")
     
-    # Rekomendasi posisi
     if pnl_percent > 5:
         st.success("✅ Posisi sudah aman, pertimbangkan trailing stop")
     elif pnl_percent > 0:
@@ -338,9 +334,8 @@ with col_conf2:
 
 st.markdown("---")
 
-# === REKOMENDASI AKHIR (ACTION & KESIMPULAN) ===
+# === REKOMENDASI AKHIR ===
 st.markdown("### 🎯 REKOMENDASI AKHIR")
-
 if action == "EKSEKUSI BUY":
     st.success(f"## ✅ {action}")
 elif action == "TUNGGU KONFIRMASI":
@@ -351,7 +346,6 @@ else:
 if recommendation_text:
     st.markdown(f"**{recommendation_text}**")
 
-# Kesimpulan 1 kalimat
 if skip_reason:
     st.warning(f"📌 **Kesimpulan:** {skip_reason}. Sebaiknya hindari trading {symbol} hari ini.")
 elif action == "EKSEKUSI BUY":
@@ -390,7 +384,7 @@ st.markdown("---")
 
 # === SCANNER ===
 st.markdown("### 🔍 Scanner Saham")
-if st.button("🚀 SCAN MARKET", width="stretch"):   # gunakan width='stretch' jika mau, tapi width parameter sudah ok
+if st.button("🚀 SCAN MARKET", use_container_width=True):
     with st.spinner("Scanning market..."):
         results = scan_saham()
         if results:
