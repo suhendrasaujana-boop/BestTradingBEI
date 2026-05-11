@@ -11,7 +11,7 @@ try:
     supabase_key: str = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(supabase_url, supabase_key)
 except Exception as e:
-    st.error(f"Gagal terhubung ke Supabase. Pastikan secrets sudah diatur.\nError: {e}")
+    st.error(f"Gagal terhubung ke Supabase. Periksa secrets.\nError: {e}")
     st.stop()
 
 def hash_password(password: str) -> str:
@@ -43,7 +43,7 @@ def user_exists(username: str) -> bool:
     except Exception:
         return False
 
-# ========== PAGE CONFIG (HARUS PALING ATAS) ==========
+# ========== PAGE CONFIG ==========
 st.set_page_config(
     page_title="Smart Money Trading System",
     page_icon="🧠",
@@ -85,21 +85,20 @@ def login_signup_page():
                     st.success("✅ Pendaftaran berhasil! Silakan login.")
                     st.rerun()
                 else:
-                    st.error("Gagal mendaftar.")
+                    st.error("Gagal mendaftar. Coba lagi.")
 
 if "authenticated" not in st.session_state or not st.session_state.authenticated:
     login_signup_page()
     st.stop()
 
-# ========== IMPORT FUNGSI ANALISIS (SETELAH LOGIN) ==========
+# ========== IMPORT FUNGSI ANALISIS ==========
 from data import (
     get_data, add_indicators, get_ihsg_trend,
-    detect_bottom_pattern, detect_valid_breakout, detect_reversal,
     detect_market_structure, detect_smart_money_volume, detect_liquidity_sweep,
     detect_candlestick_pattern, detect_market_regime, get_pivot_sr,
-    calculate_entry_sl_tp, calculate_confidence_score, detect_high_quality_setup,
-    get_trading_recommendation, backtest_strategy, scan_saham,
-    get_multi_timeframe_alignment, get_nearest_fvg, get_nearest_order_block
+    calculate_entry_sl_tp, calculate_confidence_score,
+    scan_saham, get_multi_timeframe_alignment,
+    get_nearest_fvg, get_nearest_order_block
 )
 
 def logout():
@@ -148,7 +147,7 @@ df = add_indicators(df)
 last = df.iloc[-1]
 current_price = last['close']
 
-# === MARKET FILTER IHSG ===
+# MARKET FILTER IHSG
 ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
 entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
 support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
@@ -157,7 +156,7 @@ if pd.isna(atr): atr = last['close'] * 0.02
 adx_val = last.get('adx', 0)
 if pd.isna(adx_val): adx_val = 0
 
-# === PRIORITY FILTER ===
+# PRIORITY FILTER
 skip_reason = None
 action = "SKIP"
 recommendation_text = ""
@@ -190,7 +189,7 @@ else:
     st.warning(f"📊 {ihsg_msg}")
 st.markdown("---")
 
-# === SMART MONEY DETECTION 5 KOLOM ===
+# SMART MONEY DETECTION
 st.markdown("### 🔍 Smart Money Detection")
 col1, col2, col3, col4, col5 = st.columns(5)
 structure, struct_conf, _ = detect_market_structure(df)
@@ -244,7 +243,7 @@ with col5:
         st.caption("-")
 st.markdown("---")
 
-# === MARKET REGIME ===
+# MARKET REGIME
 st.markdown("### 📈 Market Regime")
 regime, regime_conf, regime_desc = detect_market_regime(df)
 col_r1, col_r2, col_r3 = st.columns(3)
@@ -258,7 +257,7 @@ with col_r3:
 st.caption(regime_desc)
 st.markdown("---")
 
-# === PIVOT SR ===
+# PIVOT SR
 st.markdown("### 📊 Pivot Support & Resistance")
 col_sr1, col_sr2, col_sr3, col_sr4 = st.columns(4)
 with col_sr1:
@@ -271,7 +270,7 @@ with col_sr4:
     st.metric("Fib 61.8%", f"Rp{fib_618:,.0f}")
 st.markdown("---")
 
-# === ENTRY, SL, TP ===
+# ENTRY, SL, TP
 st.markdown("### 🎯 Entry - Stop Loss - Take Profit")
 if entry:
     if "BUY" in setup:
@@ -298,7 +297,7 @@ else:
     st.warning("⛔ Tidak ada setup trading berkualitas saat ini")
 st.markdown("---")
 
-# === TARGET ALTERNATIF ===
+# TARGET ALTERNATIF
 if entry and atr > 0:
     st.markdown("### 🎯 Target Harga Alternatif")
     target1 = entry + (1.5 * atr)
@@ -311,7 +310,7 @@ if entry and atr > 0:
     with col_t3:
         st.metric("Target 3 (Agresif)", f"Rp{tp:,.0f}", delta="RR 1:3")
 
-# === STATUS POSISI ===
+# STATUS POSISI
 if has_position and entry_price_manual > 0 and shares_manual > 0:
     st.markdown("---")
     st.markdown("### 📋 Status Posisi Anda")
@@ -336,7 +335,7 @@ if has_position and entry_price_manual > 0 and shares_manual > 0:
     else:
         st.error("🔴 Posisi rugi besar, pertimbangkan cut loss")
 
-# === PERINGATAN RISIKO ===
+# PERINGATAN RISIKO
 st.markdown("---")
 st.markdown("### ⚠️ Peringatan Risiko")
 if entry and sl:
@@ -352,7 +351,7 @@ if entry and sl:
 else:
     st.info("Tidak ada setup aktif, risiko rendah.")
 
-# === CONFIDENCE SCORE ===
+# CONFIDENCE SCORE
 st.markdown("---")
 st.markdown("### 📊 Confidence Score")
 confidence, factors, grade = calculate_confidence_score(df, ihsg_score)
@@ -367,7 +366,7 @@ with col_conf2:
             st.caption(f"❌ {name}: {score:.0f} ({desc})")
 st.markdown("---")
 
-# === REKOMENDASI AKHIR ===
+# REKOMENDASI AKHIR
 st.markdown("### 🎯 REKOMENDASI AKHIR")
 if action == "EKSEKUSI BUY":
     st.success(f"## ✅ {action}")
@@ -387,7 +386,7 @@ else:
     st.warning(f"📌 **Kesimpulan:** Tidak ada setup berkualitas. Tetap hold cash.")
 st.markdown("---")
 
-# === MULTI TIMEFRAME ALIGNMENT ===
+# MULTI TIMEFRAME ALIGNMENT
 st.markdown("### ⏰ Multi Timeframe Alignment")
 with st.spinner("Menganalisis multi timeframe..."):
     mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
@@ -409,7 +408,7 @@ else:
     st.warning(f"### ⚠️ {alignment} - Timeframe kontradiksi (Score: {alignment_score})")
 st.markdown("---")
 
-# === SCANNER ===
+# SCANNER
 st.markdown("### 🔍 Scanner Saham")
 if st.button("🚀 SCAN MARKET", use_container_width=True):
     with st.spinner("Scanning market..."):
