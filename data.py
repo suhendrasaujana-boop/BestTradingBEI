@@ -107,25 +107,26 @@ def get_confidence_level(score):
     else: return ("Sangat Rendah", "red")
 
 def multi_timeframe_analysis(symbol):
-    timeframes = ["1d"]
+    timeframes = ["5m", "15m", "30m", "60m", "1d"]
     scores = {}
     
     for tf in timeframes:
         df = get_data(symbol, tf)
-        if not df.empty and len(df) > 20:
+        if not df.empty and len(df) > 5:
             df = add_indicators(df)
             scores[tf] = calculate_score(df)
         else:
             scores[tf] = 50
+        
+        time.sleep(1)  # Delay biar tidak kena rate limit
     
-    for tf in ["5m", "15m", "30m", "60m"]:
-        scores[tf] = scores.get("1d", 50)
+    weights = {"5m": 0.1, "15m": 0.15, "30m": 0.2, "60m": 0.25, "1d": 0.3}
+    weighted = sum(scores[tf] * weights.get(tf, 0.2) for tf in timeframes if tf in scores)
     
-    weighted = scores.get("1d", 50)
     return {**scores, "weighted": weighted, "filtered": False}
 
 def scan_saham():
-    stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK"]
+    stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK"]
     results = []
     
     for stock in stocks:
@@ -141,7 +142,7 @@ def scan_saham():
                     "Sinyal": f"{emoji} {signal}",
                     "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
                 })
-            time.sleep(2)
+            time.sleep(1)
         except Exception as e:
             print(f"Error scan {stock}: {e}")
             continue
