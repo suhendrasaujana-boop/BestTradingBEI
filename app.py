@@ -26,17 +26,8 @@ st.set_page_config(
 with st.sidebar:
     st.title("📈 Robot Saham")
     st.markdown("---")
-    
-    symbol = st.text_input("Kode Saham", "BBCA.JK").upper()
-    timeframe = st.selectbox("Timeframe", ["5m", "15m", "30m", "60m", "1d"])
-    
-    st.markdown("---")
-    st.subheader("⚙️ SETTING TRADING")
-    
-    entry_price = st.number_input("💰 Harga Entry (Rp)", min_value=0, value=0, step=100)
-    cutloss_percent = st.slider("✂️ Cut Loss (%)", min_value=1, max_value=20, value=5)
-    takeprofit_percent = st.slider("🎯 Take Profit (%)", min_value=1, max_value=50, value=15)
-    
+    symbol = st.text_input("Kode Saham", "BBCA.JK", key="symbol_input").upper()
+    timeframe = st.selectbox("Timeframe", ["5m", "15m", "30m", "60m", "1d"], key="timeframe_select")
     st.markdown("---")
     auto_refresh = st.checkbox("Auto Refresh (30 detik)", value=False)
     st.markdown("---")
@@ -57,72 +48,82 @@ score = calculate_score(df)
 signal_label, signal_color, signal_emoji = get_signal_label(score)
 confidence_label, confidence_color = get_confidence_level(score)
 last = df.iloc[-1]
-current_price = last['close']
 
-# ========== BARIS 1: HARGA ==========
+# ========== HARGA TERTINGGI, TERENDAH, SAAT INI ==========
 st.subheader("💰 Harga")
-col1, col2, col3 = st.columns(3)
+col_high, col_low, col_close = st.columns(3)
 
-with col1:
-    st.metric("📈 Tertinggi", f"Rp{last['high']:,.0f}")
-with col2:
-    st.metric("📉 Terendah", f"Rp{last['low']:,.0f}")
-with col3:
+with col_high:
+    st.metric("📈 Tertinggi (High)", f"Rp{last['high']:,.0f}")
+with col_low:
+    st.metric("📉 Terendah (Low)", f"Rp{last['low']:,.0f}")
+with col_close:
     if len(df) > 1:
         change = last['close'] - df.iloc[-2]['close']
         change_pct = (change / df.iloc[-2]['close']) * 100
-        st.metric("💰 Saat Ini", f"Rp{last['close']:,.0f}", delta=f"{change_pct:+.2f}%")
+        st.metric("💰 Saat Ini (Close)", f"Rp{last['close']:,.0f}", 
+                  delta=f"{change_pct:+.2f}%", delta_color="normal")
     else:
-        st.metric("💰 Saat Ini", f"Rp{last['close']:,.0f}")
+        st.metric("💰 Saat Ini (Close)", f"Rp{last['close']:,.0f}")
 
 st.markdown("---")
 
-# ========== BARIS 2: CHART + SINYAL ==========
-col_chart, col_signal = st.columns([2, 1])
+# ========== LAYOUT 2 KOLOM ==========
+col_left, col_right = st.columns([2, 1.2])
 
-with col_chart:
-    st.subheader("📈 Chart Harga & EMA")
+with col_left:
+    # CHART
+    st.subheader("📈 Harga & EMA")
     st.line_chart(df[['close', 'ema20', 'ema50']], height=300)
     
-    st.subheader("📊 Indikator Teknikal")
+    # DETAIL INDIKATOR
+    st.subheader("📊 Indikator")
     col_rsi, col_macd, col_vol = st.columns(3)
-    
     with col_rsi:
-        rsi_val = last['rsi']
-        st.metric("RSI (14)", f"{rsi_val:.1f}")
-        if rsi_val < 30:
-            st.success("🟢 Oversold - Peluang Beli")
-        elif rsi_val > 70:
-            st.warning("🔴 Overbought - Waspada")
-    
+        st.metric("RSI", f"{last['rsi']:.1f}")
+        if last['rsi'] < 30:
+            st.info("🟢 Oversold (peluang beli)")
+        elif last['rsi'] > 70:
+            st.warning("🔴 Overbought")
+        # Validasi stoch_rsi_k
+        if 'stoch_rsi_k' in df.columns and 'stoch_rsi_k' in last and not pd.isna(last['stoch_rsi_k']):
+            st.caption(f"Stoch RSI: {last['stoch_rsi_k']:.1f}")
     with col_macd:
         st.metric("MACD", f"{last['macd']:.2f}")
-        st.metric("Signal Line", f"{last['macd_signal']:.2f}", delta=f"{last['macd_histogram']:.2f}")
-    
+        st.metric("Signal", f"{last['macd_signal']:.2f}", delta=f"{last['macd_histogram']:.2f}")
     with col_vol:
         st.metric("Volume", f"{last['volume']:,.0f}")
-        st.metric("MA Volume", f"{last['volume_ma20']:,.0f}")
+        st.metric("MA20", f"{last['volume_ma20']:,.0f}")
+        if last['volume'] < last['volume_ma20'] * 0.8:
+            st.warning("⚠️ Volume rendah")
 
-with col_signal:
-    # Box Sinyal
+with col_right:
+    st.subheader("🎯 Sinyal")
+    
     if "BUY" in signal_label:
         bg_color = "#90EE90"
     elif "SELL" in signal_label:
         bg_color = "#FFCCCC"
     else:
         bg_color = "#FFE4B5"
+        
+    st.markdown(f"""
+    <div style="background-color:{bg_color}; padding:10px; border-radius:10px; text-align:center">
+        <h2 style="margin:0; color:black">{signal_emoji} {signal_label}</h2>
+        <h1 style="margin:0; color:black">{score:.0f}<span style="font-size:20px">/100</span></h1>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown(f"""
-    <div style="background-color:{bg_color}; padding:15px; border-radius:10px; text-align:center">
-        <h2 style="margin:0">{signal_emoji} {signal_label}</h2>
-        <h1 style="margin:0">{score:.0f}<span style="font-size:18px">/100</span></h1>
-        <p style="margin:5px 0 0 0">Keyakinan: <strong>{confidence_label}</strong></p>
+    <div style="background-color:#f0f2f6; padding:5px; border-radius:10px; text-align:center; margin-top:5px">
+        <p style="margin:0; color:black">Keyakinan: <strong>{confidence_label}</strong></p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     st.subheader("📝 Rekomendasi")
-    st.info(get_trading_recommendation(score, df))
+    rekomendasi = get_trading_recommendation(score, df)
+    st.markdown(rekomendasi)
     
     st.markdown("---")
     st.subheader("📊 Support & Resistance")
@@ -131,87 +132,108 @@ with col_signal:
         st.metric("🛡️ Support", f"Rp{last['support']:,.0f}")
     with col_res:
         st.metric("🚧 Resistance", f"Rp{last['resistance']:,.0f}")
-
-st.markdown("---")
-
-# ========== BARIS 3: RISK MANAGEMENT ==========
-st.subheader("🛡️ RISK MANAGEMENT")
-
-if entry_price > 0:
-    cutloss_price = entry_price * (1 - cutloss_percent/100)
-    takeprofit_price = entry_price * (1 + takeprofit_percent/100)
-    profit_loss_pct = ((current_price - entry_price) / entry_price) * 100
-    profit_loss_rp = current_price - entry_price
     
-    col_entry, col_cl, col_tp, col_pl = st.columns(4)
-    
-    with col_entry:
-        st.metric("💰 Entry Price", f"Rp{entry_price:,.0f}")
-    
-    with col_cl:
-        st.metric("✂️ Cut Loss", f"Rp{cutloss_price:,.0f} ({cutloss_percent}%)")
-        if current_price <= cutloss_price:
-            st.error("🚨 CUT LOSS TRIGGERED! Segera Jual!")
-    
-    with col_tp:
-        st.metric("🎯 Take Profit", f"Rp{takeprofit_price:,.0f} ({takeprofit_percent}%)")
-        if current_price >= takeprofit_price:
-            st.success("🎉 TAKE PROFIT TRIGGERED! Ambil Untung!")
-    
-    with col_pl:
-        if profit_loss_pct >= 0:
-            st.metric("📈 Profit/Loss", f"+{profit_loss_pct:.2f}%", delta=f"+Rp{profit_loss_rp:,.0f}")
+    if 'adx' in last and not pd.isna(last['adx']):
+        st.markdown("---")
+        st.subheader("📊 Trend Strength")
+        adx_value = last['adx']
+        if adx_value >= 25:
+            st.success(f"ADX: {adx_value:.1f} (Tren Kuat ✅)")
+        elif adx_value >= 20:
+            st.info(f"ADX: {adx_value:.1f} (Tren Mulai)")
         else:
-            st.metric("📉 Profit/Loss", f"{profit_loss_pct:.2f}%", delta=f"Rp{profit_loss_rp:,.0f}")
-else:
-    st.info("💡 Masukkan Harga Entry di sidebar untuk mengaktifkan Risk Management")
+            st.warning(f"ADX: {adx_value:.1f} (Tren Lemah ⚠️)")
 
+# ========== MULTI TIMEFRAME ==========
 st.markdown("---")
-
-# ========== BARIS 4: MULTI TIMEFRAME ==========
-st.subheader("⏰ Multi Timeframe Analysis")
+st.subheader("⏰ Multi Timeframe")
 
 mtf = multi_timeframe_analysis(symbol)
-avg_score = mtf.get('weighted', 50)
+avg_score = mtf.get('weighted', 0)
+final_label, final_color, final_emoji = get_signal_label(avg_score)
 
-col_tf1, col_tf2, col_tf3, col_tf4, col_tf5 = st.columns(5)
+if mtf.get('filtered', False):
+    st.warning(mtf.get('filter_message', ''))
 
-with col_tf1:
-    st.metric("5 Menit", f"{mtf.get('5m', 50):.0f}")
-with col_tf2:
-    st.metric("15 Menit", f"{mtf.get('15m', 50):.0f}")
-with col_tf3:
-    st.metric("30 Menit", f"{mtf.get('30m', 50):.0f}")
-with col_tf4:
-    st.metric("1 Jam", f"{mtf.get('1h', 50):.0f}")
-with col_tf5:
-    st.metric("1 Hari", f"{mtf.get('1d', 50):.0f}")
+col5m, col15m, col30m, col1h, col1d = st.columns(5)
 
-final_label, _, final_emoji = get_signal_label(avg_score)
-st.markdown(f"### 🎯 Final Signal: {final_emoji} {final_label} (Score: {avg_score:.1f}/100)")
+with col5m:
+    s = mtf.get("5m", 0)
+    st.metric("5m", f"{s:.0f}")
+with col15m:
+    s = mtf.get("15m", 0)
+    st.metric("15m", f"{s:.0f}")
+with col30m:
+    s = mtf.get("30m", 0)
+    st.metric("30m", f"{s:.0f}")
+with col1h:
+    s = mtf.get("1h", 0)
+    st.metric("1h", f"{s:.0f}")
+with col1d:
+    s = mtf.get("1d", 0)
+    st.metric("1d", f"{s:.0f}")
 
+if "BUY" in final_label:
+    final_bg = "#90EE90"
+elif "SELL" in final_label:
+    final_bg = "#FFCCCC"
+else:
+    final_bg = "#FFE4B5"
+
+st.markdown(f"""
+<div style="background-color:{final_bg}; padding:10px; border-radius:10px; margin-top:10px; text-align:center">
+    <h3 style="margin:0; color:black">🎯 Final Signal: {final_emoji} {final_label}</h3>
+    <p style="margin:0; color:black">Score: {avg_score:.1f}/100</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ========== BACKTEST ==========
 st.markdown("---")
+with st.expander("📊 Backtest Strategy (Threshold BUY>=60, SELL<=40)"):
+    if st.button("Jalankan Backtest", key="backtest_btn"):
+        with st.spinner("Menghitung performa..."):
+            result = backtest_strategy(df)
+            col_b1, col_b2, col_b3 = st.columns(3)
+            with col_b1:
+                st.metric("Return (%)", f"{result.get('return', 0)}%")
+            with col_b2:
+                st.metric("Winrate (%)", f"{result.get('winrate', 0)}%")
+            with col_b3:
+                st.metric("Jumlah Trades", result.get('trades', 0))
+            st.caption(f"Modal awal: Rp100.000.000 → Akhir: Rp{result.get('final_capital', 0):,.0f}")
+            trades = result.get('trades', 0)
+            if trades > 0:
+                if result.get('winrate', 0) >= 55 and result.get('return', 0) > 20:
+                    st.success(f"✅ Performa bagus: Winrate {result.get('winrate')}% dengan return {result.get('return')}% dari {trades} trade.")
+                    st.balloons()
+                else:
+                    st.info(f"Hasil backtest: Winrate {result.get('winrate')}%, Return {result.get('return')}%, Trades {trades}.")
+            else:
+                st.warning("Tidak ada sinyal trade dalam periode ini.")
+    else:
+        st.info("Klik tombol di atas untuk melihat performa strategi berdasarkan data historis.")
 
-# ========== BARIS 5: SCANNER ==========
+# ========== SCANNER ==========
+st.markdown("---")
 st.subheader("🔍 Scanner Saham")
 
-if st.button("🚀 SCAN MARKET SEKARANG"):
-    with st.spinner("Sedang scanning market..."):
+if st.button("🚀 Scan Market", width="stretch"):  # <--- PERBAIKAN: use_container_width diganti width="stretch"
+    with st.spinner("Scanning..."):
         try:
             results = scan_saham()
             if results:
                 df_scan = pd.DataFrame(results)
                 st.dataframe(df_scan, use_container_width=True, hide_index=True)
-                st.success(f"🏆 Top Pick: {results[0]['Kode']} dengan Score {results[0]['Score']}")
+                st.success(f"🏆 Top 3: {', '.join([r['Kode'] for r in results[:3]])}")
             else:
-                st.warning("Tidak ada data saham ditemukan")
+                st.warning("Tidak ada data")
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
 st.markdown("---")
-st.caption("⚠️ DISCLAIMER: Ini adalah alat bantu analisis teknikal, bukan rekomendasi investasi. Selakukan riset sendiri sebelum trading.")
+st.caption("⚠️ Disclaimer: Alat bantu analisis, bukan rekomendasi investasi.")
 
-# Auto Refresh
+# ========== AUTO REFRESH (DIPINDAHKAN KE BAWAH) ==========
 if auto_refresh:
     time.sleep(30)
     st.rerun()
