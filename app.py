@@ -42,7 +42,7 @@ with st.sidebar:
     st.markdown("---")
     
     # DEFAULT BBCA tanpa .JK, user cukup ketik BBCA, BBRI, dll
-    symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "BBCA").upper()
+    symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "IHSG").upper()
     timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
     
     st.markdown("---")
