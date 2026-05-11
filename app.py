@@ -390,7 +390,7 @@ st.markdown("---")
 
 # === SCANNER ===
 st.markdown("### 🔍 Scanner Saham")
-if st.button("🚀 SCAN MARKET", use_container_width=True):
+if st.button("🚀 SCAN MARKET", width="stretch"):   # gunakan width='stretch' jika mau, tapi width parameter sudah ok
     with st.spinner("Scanning market..."):
         results = scan_saham()
         if results:
