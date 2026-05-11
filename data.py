@@ -130,8 +130,8 @@ def add_indicators(df):
     # VWAP
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     
-    # Fill NaN awal (backfill dan forward fill)
-    df = df.fillna(method='bfill').fillna(method='ffill')
+    # Fill NaN awal (backfill dan forward fill) - cara baru untuk pandas >= 2.2
+    df = df.bfill().ffill()
     
     return df
 
@@ -140,7 +140,6 @@ def get_ihsg_trend():
         ihsg = get_data("^JKSE", "1d")
         if ihsg.empty or len(ihsg) < 20:
             # Fallback: langsung dari yfinance tanpa cache
-            import yfinance as yf
             ticker = yf.Ticker("^JKSE")
             df_fallback = ticker.history(period="1mo")
             if df_fallback.empty:
@@ -781,7 +780,7 @@ def calculate_confidence_score(df, ihsg_score=50):
     factors = []
     total = 50
     
-    # 1. STRUCTURE SCORE (20%) - BARU
+    # 1. STRUCTURE SCORE (20%)
     structure, struct_conf, struct_desc = detect_market_structure(df)
     if "BULLISH" in structure:
         total += struct_conf * 0.20
@@ -792,7 +791,7 @@ def calculate_confidence_score(df, ihsg_score=50):
     else:
         factors.append(("Structure", 0, "Neutral"))
     
-    # 2. FVG SCORE (10%) - BARU
+    # 2. FVG SCORE (10%)
     nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
     fvg_score = 0
     if nearest_bullish_fvg:
@@ -813,7 +812,7 @@ def calculate_confidence_score(df, ihsg_score=50):
             factors.append(("FVG", -5, "Bearish FVG ada"))
     total += fvg_score
     
-    # 3. ORDER BLOCK SCORE (10%) - BARU
+    # 3. ORDER BLOCK SCORE (10%)
     nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
     ob_score = 0
     if nearest_bullish_ob:
@@ -834,7 +833,7 @@ def calculate_confidence_score(df, ihsg_score=50):
             factors.append(("Order Block", -5, "Bearish OB ada"))
     total += ob_score
     
-    # 4. TREND SCORE (10%) - DITURUNKAN dari 15%
+    # 4. TREND SCORE (10%)
     if last['ema20'] > last['ema50']:
         total += 10
         factors.append(("Trend", 10, "Bullish"))
@@ -842,7 +841,7 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 10
         factors.append(("Trend", -10, "Bearish"))
     
-    # 5. MOMENTUM SCORE (5%) - DITURUNKAN dari 15%
+    # 5. MOMENTUM SCORE (5%)
     if last['macd_histogram'] > 0 and last['rsi'] > 50:
         total += 5
         factors.append(("Momentum", 5, "Bullish"))
@@ -850,7 +849,7 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 5
         factors.append(("Momentum", -5, "Bearish"))
     
-    # 6. VOLUME SCORE (15%) - TETAP
+    # 6. VOLUME SCORE (15%)
     if last['volume_ratio'] >= 1.5:
         total += 15
         factors.append(("Volume", 15, f"Spike ({last['volume_ratio']:.1f}x)"))
@@ -858,7 +857,7 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 10
         factors.append(("Volume", -10, f"Sepi"))
     
-    # 7. VOLATILITY SCORE (5%) - DITURUNKAN dari 10%
+    # 7. VOLATILITY SCORE (5%)
     if last['adx'] >= 25:
         total += 5
         factors.append(("ADX", 5, f"Strong ({last['adx']:.0f})"))
@@ -866,7 +865,7 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 5
         factors.append(("ADX", -5, f"Sideways"))
     
-    # 8. REGIME SCORE (10%) - TETAP
+    # 8. REGIME SCORE (10%)
     regime, regime_conf, _ = detect_market_regime(df)
     if regime == "TRENDING" or regime == "STRONG_TRENDING":
         total += regime_conf * 0.10
@@ -875,7 +874,7 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= regime_conf * 0.10
         factors.append(("Regime", -regime_conf * 0.10, regime))
     
-    # 9. MARKET SCORE (5%) - IHSG
+    # 9. MARKET SCORE (5%)
     total += (ihsg_score - 50) * 0.10
     factors.append(("IHSG", (ihsg_score - 50) * 0.10, f"Score {ihsg_score:.0f}"))
     
@@ -927,7 +926,7 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     
     # PRIORITY 1: BULLISH BOS + FVG + ORDER BLOCK (Smart Money Combo)
     if "BULLISH" in structure and nearest_bullish_fvg and nearest_bullish_ob:
-        entry_price = last['close']   # Dulu *1.001, sekarang market order
+        entry_price = last['close']
         stop_loss = entry_price - (1.5 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "SMART_MONEY_COMBO_BUY"
