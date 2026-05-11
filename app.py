@@ -2,46 +2,54 @@ import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
-from supabase import create_client, Client
-import hashlib
 
-# ========== INISIALISASI SUPABASE ==========
-try:
-    supabase_url: str = st.secrets["SUPABASE_URL"]
-    supabase_key: str = st.secrets["SUPABASE_KEY"]
-    supabase: Client = create_client(supabase_url, supabase_key)
-except Exception as e:
-    st.error(f"Gagal terhubung ke Supabase. Periksa secrets.\nError: {e}")
-    st.stop()
+# ========== SISTEM LOGIN SEDERHANA (TANPA SUPABASE) ==========
+# Ganti password di sini sesuai keinginan Anda
+CORRECT_PASSWORD = "admin123"  # <-- Ganti dengan password Anda
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def add_user(username: str, password: str) -> bool:
-    try:
-        existing = supabase.table("users").select("id").eq("username", username).execute()
-        if existing.data:
-            return False
-        hashed = hash_password(password)
-        supabase.table("users").insert({"username": username, "password": hashed}).execute()
+def check_password():
+    """Fungsi login sederhana dengan password"""
+    
+    # Inisialisasi session state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "username" not in st.session_state:
+        st.session_state.username = ""
+    
+    # Jika sudah login, return True
+    if st.session_state.authenticated:
         return True
-    except Exception:
-        return False
+    
+    # Tampilkan halaman login
+    st.title("🧠 Smart Money Trading System")
+    st.markdown("Selamat datang! Silakan masukkan password untuk mengakses aplikasi.")
+    
+    username = st.text_input("Username", placeholder="Masukkan nama Anda")
+    password = st.text_input("Password", type="password", placeholder="Masukkan password")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        login_button = st.button("🔐 Masuk", type="primary", use_container_width=True)
+    
+    if login_button:
+        if not username:
+            st.error("❌ Username harus diisi!")
+        elif password == CORRECT_PASSWORD:
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            st.rerun()
+        else:
+            st.error("❌ Password salah!")
+    
+    # Tampilkan petunjuk
+    with st.expander("ℹ️ Informasi Login"):
+        st.info(f"**Password default:** `{CORRECT_PASSWORD}`\n\nGanti password dengan mengedit variabel `CORRECT_PASSWORD` di file app.py")
+    
+    return False
 
-def check_user(username: str, password: str) -> bool:
-    try:
-        hashed = hash_password(password)
-        resp = supabase.table("users").select("id").eq("username", username).eq("password", hashed).execute()
-        return len(resp.data) > 0
-    except Exception:
-        return False
-
-def user_exists(username: str) -> bool:
-    try:
-        resp = supabase.table("users").select("id").eq("username", username).execute()
-        return len(resp.data) > 0
-    except Exception:
-        return False
+# Jalankan cek login
+if not check_password():
+    st.stop()
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -50,46 +58,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-def login_signup_page():
-    st.title("🧠 Smart Money Trading System")
-    st.markdown("Selamat datang! Silakan masuk atau daftar.")
-    tab1, tab2 = st.tabs(["🔐 Masuk", "📝 Daftar Akun Baru"])
-    with tab1:
-        username = st.text_input("Username", key="login_user")
-        password = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Masuk", key="login_btn"):
-            if check_user(username, password):
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.rerun()
-            else:
-                st.error("❌ Username atau password salah!")
-    with tab2:
-        new_user = st.text_input("Username", key="reg_user")
-        new_pass = st.text_input("Password", type="password", key="reg_pass")
-        confirm = st.text_input("Konfirmasi Password", type="password", key="reg_confirm")
-        if st.button("Daftar", key="reg_btn"):
-            if not new_user or not new_pass:
-                st.error("Username dan password harus diisi!")
-            elif len(new_user) < 3:
-                st.error("Username minimal 3 karakter!")
-            elif len(new_pass) < 4:
-                st.error("Password minimal 4 karakter!")
-            elif new_pass != confirm:
-                st.error("Password dan konfirmasi tidak sama!")
-            elif user_exists(new_user):
-                st.error("Username sudah terdaftar! Silakan login.")
-            else:
-                if add_user(new_user, new_pass):
-                    st.success("✅ Pendaftaran berhasil! Silakan login.")
-                    st.rerun()
-                else:
-                    st.error("Gagal mendaftar. Coba lagi.")
-
-if "authenticated" not in st.session_state or not st.session_state.authenticated:
-    login_signup_page()
-    st.stop()
 
 # ========== IMPORT FUNGSI ANALISIS ==========
 from data import (
