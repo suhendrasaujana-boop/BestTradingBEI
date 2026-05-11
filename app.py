@@ -36,7 +36,7 @@ st.set_page_config(
 # SIDEBAR
 with st.sidebar:
     st.title("🧠 Smart Money Trading")
-    st.caption("Market Structure | Smart Money | Liquidity Sweep")
+    st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
     st.markdown("---")
     
     symbol = st.text_input("Kode Saham", "BBCA.JK").upper()
@@ -50,12 +50,11 @@ with st.sidebar:
     
     st.markdown("---")
     st.info("""
-    **Fitur:**
-    - Market Structure (BOS)
-    - Smart Money Volume
-    - Liquidity Sweep / SFP
-    - Candlestick Patterns
-    - Pivot Support/Resistance
+    **Fitur Smart Money:**
+    - Swing Structure (BOS/CHOCH)
+    - Fair Value Gap (FVG)
+    - Order Block
+    - Liquidity Sweep
     - Multi Timeframe Alignment
     """)
     st.markdown("---")
@@ -87,21 +86,23 @@ else:
 
 st.markdown("---")
 
-# SMART MONEY DETECTION (4 KOLOM)
+# SMART MONEY DETECTION (5 KOLOM - MENAMBAHKAN FVG & ORDER BLOCK)
 st.markdown("### 🔍 Smart Money Detection")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
+# 1. Market Structure
 structure, struct_conf, struct_desc = detect_market_structure(df)
 with col1:
     if "BULLISH" in structure:
-        st.success(f"**Market Structure**\n{structure}")
+        st.success(f"**Structure**\n{structure}")
     elif "BEARISH" in structure:
-        st.error(f"**Market Structure**\n{structure}")
+        st.error(f"**Structure**\n{structure}")
     else:
-        st.info(f"**Market Structure**\n{structure}")
-    st.caption(f"Keyakinan: {struct_conf:.0f}%")
+        st.info(f"**Structure**\n{structure}")
+    st.caption(f"Conf: {struct_conf:.0f}%")
 
+# 2. Smart Money Volume
 sm, sm_conf, sm_desc = detect_smart_money_volume(df)
 with col2:
     if sm == "ACCUMULATION":
@@ -110,29 +111,48 @@ with col2:
         st.error(f"**Smart Money**\n{sm}")
     else:
         st.info(f"**Smart Money**\n{sm}")
-    st.caption(f"Keyakinan: {sm_conf:.0f}%")
+    st.caption(f"Conf: {sm_conf:.0f}%")
 
+# 3. Liquidity Sweep
 is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
 with col3:
     if sweep_type == "BULLISH_SFP":
-        st.success(f"**Liquidity Sweep**\n{sweep_type}")
+        st.success(f"**Liquidity**\n{sweep_type}")
     elif sweep_type == "BEARISH_SFP":
-        st.error(f"**Liquidity Sweep**\n{sweep_type}")
+        st.error(f"**Liquidity**\n{sweep_type}")
     elif sweep_type == "FAKE_BREAKOUT":
-        st.warning(f"**Liquidity Sweep**\n{sweep_type}")
+        st.warning(f"**Liquidity**\n{sweep_type}")
     else:
-        st.info(f"**Liquidity Sweep**\nTidak ada")
-    st.caption(f"Keyakinan: {sweep_conf:.0f}%")
+        st.info(f"**Liquidity**\nTidak ada")
+    st.caption(f"Conf: {sweep_conf:.0f}%")
 
-pattern, pattern_conf, pattern_desc = detect_candlestick_pattern(df)
+# 4. Fair Value Gap (BARU)
+from data import get_nearest_fvg
+nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
 with col4:
-    if "BULLISH" in pattern:
-        st.success(f"**Candlestick**\n{pattern}")
-    elif "BEARISH" in pattern:
-        st.error(f"**Candlestick**\n{pattern}")
+    if nearest_bullish_fvg:
+        st.success(f"**FVG**\nBullish Gap")
+        st.caption(f"At: Rp{nearest_bullish_fvg['upper']:,.0f}")
+    elif nearest_bearish_fvg:
+        st.error(f"**FVG**\nBearish Gap")
+        st.caption(f"At: Rp{nearest_bearish_fvg['lower']:,.0f}")
     else:
-        st.info(f"**Candlestick**\n{pattern}")
-    st.caption(pattern_desc[:40] if pattern_desc else "-")
+        st.info(f"**FVG**\nNo gap")
+        st.caption("-")
+
+# 5. Order Block (BARU)
+from data import get_nearest_order_block
+nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
+with col5:
+    if nearest_bullish_ob:
+        st.success(f"**Order Block**\nBullish OB")
+        st.caption(f"At: Rp{nearest_bullish_ob['high']:,.0f}")
+    elif nearest_bearish_ob:
+        st.error(f"**Order Block**\nBearish OB")
+        st.caption(f"At: Rp{nearest_bearish_ob['low']:,.0f}")
+    else:
+        st.info(f"**Order Block**\nNo OB")
+        st.caption("-")
 
 st.markdown("---")
 
@@ -217,7 +237,7 @@ col_conf1, col_conf2 = st.columns([1, 2])
 with col_conf1:
     st.metric("Total Score", f"{confidence:.0f}", delta=grade)
 with col_conf2:
-    for name, score, desc in factors[:4]:
+    for name, score, desc in factors[:5]:
         if score > 0:
             st.caption(f"✅ {name}: +{score:.0f} ({desc})")
         else:
@@ -286,7 +306,7 @@ if st.button("🚀 SCAN MARKET", width="stretch"):
             st.warning("Tidak ada setup berkualitas")
 
 st.markdown("---")
-st.caption("⚠️ DISCLAIMER: Sistem berbasis Market Structure & Smart Money. Bukan rekomendasi investasi.")
+st.caption("⚠️ DISCLAIMER: Sistem berbasis Smart Money (BOS, FVG, Order Block). Bukan rekomendasi investasi.")
 
 if auto_refresh:
     time.sleep(30)
