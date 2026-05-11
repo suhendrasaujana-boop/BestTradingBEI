@@ -20,9 +20,11 @@ def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
     
-    if symbol == "^JKSE" or symbol == "JKSE":
+    # Normalisasi symbol
+    symbol = symbol.upper()
+    if symbol == "IHSG":
         symbol = "^JKSE"
-    elif not symbol.endswith('.JK') and symbol not in ["^JKSE"]:
+    elif symbol != "^JKSE" and not symbol.endswith('.JK'):
         symbol = f"{symbol}.JK"
     
     cache_key = f"{symbol}_{timeframe}"
