@@ -61,31 +61,37 @@ def add_indicators(df):
         return df
     df = df.copy()
     
+    # Basic EMA
     df['ema10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
+    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
+    # MACD
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
     
+    # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
     
+    # ATR
     high_low = df['high'] - df['low']
     high_close = abs(df['high'] - df['close'].shift())
     low_close = abs(df['low'] - df['close'].shift())
     df['tr'] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     
+    # ADX
     plus_dm = df['high'].diff()
     minus_dm = df['low'].diff()
     plus_dm[plus_dm < 0] = 0
@@ -96,6 +102,7 @@ def add_indicators(df):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df['adx'] = dx.rolling(window=14).mean()
     
+    # Support & Resistance (rolling)
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
@@ -150,7 +157,7 @@ def get_ihsg_trend():
     except:
         return "NEUTRAL", 50, "IHSG data unavailable"
 
-# ========== BOTTOM DETECTION (FITUR LAMA) ==========
+# ========== FITUR LAMA (BOTTOM, BREAKOUT, REVERSAL) ==========
 def detect_bottom_pattern(df):
     if df.empty or len(df) < 30:
         return False, 0, "Data tidak cukup"
@@ -189,7 +196,6 @@ def detect_bottom_pattern(df):
     desc = " | ".join(signals) if signals else "Tidak ada sinyal"
     return is_bottom, min(100, confidence), desc
 
-# ========== BREAKOUT DETECTION (FITUR LAMA) ==========
 def detect_valid_breakout(df, lookback=20):
     if df.empty or len(df) < lookback + 5:
         return False, "NONE", 0, "Data tidak cukup", 0
@@ -235,7 +241,6 @@ def detect_valid_breakout(df, lookback=20):
     desc = " | ".join(signals)
     return confidence >= 50, breakout_type, min(100, confidence), desc, resistance
 
-# ========== REVERSAL DETECTION (FITUR LAMA) ==========
 def detect_reversal(df):
     if df.empty or len(df) < 30:
         return "NONE", 0, "Data tidak cukup"
@@ -280,51 +285,296 @@ def detect_reversal(df):
         return reversal_type, min(100, confidence), desc
     return "NONE", confidence, desc
 
-# ========== MARKET STRUCTURE ==========
-def detect_market_structure(df):
-    if df.empty or len(df) < 20:
-        return "RANGE", 0, "Data tidak cukup"
+# ========== FITUR BARU 1: SWING STRUCTURE (BOS, CHOCH, LIQUIDITY ZONES) ==========
+def detect_swing_points(df, lookback=5):
+    """Deteksi valid swing high dan swing low"""
+    if df.empty or len(df) < lookback * 2 + 1:
+        return [], []
     
-    last = df.iloc[-1]
-    prev_10 = df.iloc[-11:-1]
-    prev_20 = df.iloc[-21:-1]
+    swing_highs = []
+    swing_lows = []
     
-    recent_high = prev_10['high'].max()
-    recent_low = prev_10['low'].min()
-    higher_high = prev_20['high'].max()
-    lower_low = prev_20['low'].min()
+    for i in range(lookback, len(df) - lookback):
+        is_swing_high = True
+        is_swing_low = True
+        
+        for j in range(1, lookback + 1):
+            if df['high'].iloc[i] <= df['high'].iloc[i - j] or df['high'].iloc[i] <= df['high'].iloc[i + j]:
+                is_swing_high = False
+            if df['low'].iloc[i] >= df['low'].iloc[i - j] or df['low'].iloc[i] >= df['low'].iloc[i + j]:
+                is_swing_low = False
+        
+        if is_swing_high:
+            swing_highs.append((i, df['high'].iloc[i]))
+        if is_swing_low:
+            swing_lows.append((i, df['low'].iloc[i]))
     
-    structure = "RANGE"
-    confidence = 0
+    return swing_highs, swing_lows
+
+def detect_bos_choch(df):
+    """Deteksi Break of Structure (BOS) dan Change of Character (CHOCH)"""
+    if df.empty or len(df) < 30:
+        return "NEUTRAL", 0, "No BOS/CHOCH"
+    
+    swing_highs, swing_lows = detect_swing_points(df)
+    
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return "NEUTRAL", 0, "Insufficient swing points"
+    
+    last_high = swing_highs[-1][1]
+    prev_high = swing_highs[-2][1]
+    last_low = swing_lows[-1][1]
+    prev_low = swing_lows[-2][1]
+    
+    last_close = df.iloc[-1]['close']
+    
     signals = []
+    confidence = 0
+    result = "NEUTRAL"
     
-    if last['close'] > recent_high and last['close'] > higher_high:
-        structure = "BULLISH_BOS"
+    # Bullish BOS: higher high
+    if last_high > prev_high and last_close > prev_high:
+        result = "BULLISH_BOS"
         confidence += 40
         signals.append("Break of Structure UP")
-    elif last['close'] < recent_low and last['close'] < lower_low:
-        structure = "BEARISH_BOS"
+    
+    # Bearish BOS: lower low
+    elif last_low < prev_low and last_close < prev_low:
+        result = "BEARISH_BOS"
         confidence += 40
         signals.append("Break of Structure DOWN")
     
-    if last['low'] > prev_10['low'].min():
-        confidence += 15
-        signals.append("Higher Low")
+    # CHOCH (Change of Character) - reversal
+    if len(swing_highs) >= 3 and len(swing_lows) >= 3:
+        if swing_highs[-1][1] < swing_highs[-2][1] and swing_lows[-1][1] > swing_lows[-2][1]:
+            result = "BULLISH_CHOCH"
+            confidence += 35
+            signals.append("Change of Character UP")
+        elif swing_highs[-1][1] > swing_highs[-2][1] and swing_lows[-1][1] < swing_lows[-2][1]:
+            result = "BEARISH_CHOCH"
+            confidence += 35
+            signals.append("Change of Character DOWN")
     
-    if last['high'] < prev_10['high'].max():
-        confidence += 15
-        signals.append("Lower High")
+    desc = " | ".join(signals) if signals else "No BOS/CHOCH"
+    return result, min(100, confidence), desc
+
+def detect_liquidity_zones(df, lookback=20):
+    """Deteksi liquidity zones (equal highs/lows)"""
+    if df.empty or len(df) < lookback:
+        return [], []
     
-    if 'supertrend_direction' in last:
-        if last['supertrend_direction'] == 1 and structure in ["BULLISH_BOS", "RANGE"]:
-            structure = "BULLISH_TREND"
-            confidence += 20
-        elif last['supertrend_direction'] == -1 and structure in ["BEARISH_BOS", "RANGE"]:
-            structure = "BEARISH_TREND"
-            confidence += 20
+    recent_highs = df['high'].iloc[-lookback:].tolist()
+    recent_lows = df['low'].iloc[-lookback:].tolist()
+    
+    liquidity_highs = []
+    liquidity_lows = []
+    
+    # Detect equal highs (liquidity above)
+    for i in range(len(recent_highs)):
+        count = 1
+        for j in range(i+1, len(recent_highs)):
+            if abs(recent_highs[i] - recent_highs[j]) / recent_highs[i] < 0.005:
+                count += 1
+        if count >= 2:
+            liquidity_highs.append(recent_highs[i])
+    
+    # Detect equal lows (liquidity below)
+    for i in range(len(recent_lows)):
+        count = 1
+        for j in range(i+1, len(recent_lows)):
+            if abs(recent_lows[i] - recent_lows[j]) / recent_lows[i] < 0.005:
+                count += 1
+        if count >= 2:
+            liquidity_lows.append(recent_lows[i])
+    
+    return list(set(liquidity_highs)), list(set(liquidity_lows))
+
+# ========== FITUR BARU 2: FAIR VALUE GAP (FVG) ==========
+def detect_fair_value_gap(df):
+    """Deteksi Fair Value Gap (Imbalance) - Smart Money Concept"""
+    if df.empty or len(df) < 3:
+        return [], []
+    
+    fvg_bullish = []
+    fvg_bearish = []
+    
+    for i in range(2, len(df)):
+        # Bullish FVG: low candle i > high candle i-2 (gap)
+        if df['low'].iloc[i] > df['high'].iloc[i-2]:
+            fvg_bullish.append({
+                'index': i,
+                'upper': df['low'].iloc[i],
+                'lower': df['high'].iloc[i-2],
+                'strength': df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns else 1
+            })
+        
+        # Bearish FVG: high candle i < low candle i-2 (gap down)
+        if df['high'].iloc[i] < df['low'].iloc[i-2]:
+            fvg_bearish.append({
+                'index': i,
+                'upper': df['low'].iloc[i-2],
+                'lower': df['high'].iloc[i],
+                'strength': df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns else 1
+            })
+    
+    return fvg_bullish, fvg_bearish
+
+def get_nearest_fvg(df):
+    """Dapatkan FVG terdekat dengan harga saat ini"""
+    last_close = df.iloc[-1]['close']
+    fvg_bullish, fvg_bearish = detect_fair_value_gap(df)
+    
+    nearest_bullish = None
+    nearest_bearish = None
+    dist_bullish = float('inf')
+    dist_bearish = float('inf')
+    
+    for fvg in fvg_bullish:
+        if fvg['upper'] > last_close:
+            dist = fvg['upper'] - last_close
+            if dist < dist_bullish:
+                dist_bullish = dist
+                nearest_bullish = fvg
+    
+    for fvg in fvg_bearish:
+        if fvg['lower'] < last_close:
+            dist = last_close - fvg['lower']
+            if dist < dist_bearish:
+                dist_bearish = dist
+                nearest_bearish = fvg
+    
+    return nearest_bullish, nearest_bearish
+
+# ========== FITUR BARU 3: ORDER BLOCK ==========
+def detect_order_blocks(df):
+    """Deteksi Order Block (Supply/Demand Zone)"""
+    if df.empty or len(df) < 5:
+        return [], []
+    
+    bullish_blocks = []
+    bearish_blocks = []
+    
+    for i in range(2, len(df) - 2):
+        # Bullish Order Block: bearish candle sebelum bullish move
+        if df['close'].iloc[i] > df['open'].iloc[i] and df['close'].iloc[i-1] < df['open'].iloc[i-1]:
+            if df['close'].iloc[i] > df['high'].iloc[i-1]:
+                bullish_blocks.append({
+                    'index': i-1,
+                    'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1],
+                    'strength': 1
+                })
+        
+        # Bearish Order Block: bullish candle sebelum bearish move
+        if df['close'].iloc[i] < df['open'].iloc[i] and df['close'].iloc[i-1] > df['open'].iloc[i-1]:
+            if df['close'].iloc[i] < df['low'].iloc[i-1]:
+                bearish_blocks.append({
+                    'index': i-1,
+                    'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1],
+                    'strength': 1
+                })
+    
+    return bullish_blocks, bearish_blocks
+
+def get_nearest_order_block(df):
+    """Dapatkan Order Block terdekat dengan harga saat ini"""
+    last_close = df.iloc[-1]['close']
+    bullish_blocks, bearish_blocks = detect_order_blocks(df)
+    
+    nearest_bullish = None
+    nearest_bearish = None
+    dist_bullish = float('inf')
+    dist_bearish = float('inf')
+    
+    for block in bullish_blocks:
+        if block['high'] > last_close:
+            dist = block['high'] - last_close
+            if dist < dist_bullish:
+                dist_bullish = dist
+                nearest_bullish = block
+    
+    for block in bearish_blocks:
+        if block['low'] < last_close:
+            dist = last_close - block['low']
+            if dist < dist_bearish:
+                dist_bearish = dist
+                nearest_bearish = block
+    
+    return nearest_bullish, nearest_bearish
+
+# ========== MARKET STRUCTURE (LAMA, TAPI DIPERBAIKI) ==========
+def detect_market_structure(df):
+    """Market structure dengan swing points"""
+    if df.empty or len(df) < 20:
+        return "RANGE", 0, "Data tidak cukup"
+    
+    bos_cho, bos_conf, bos_desc = detect_bos_choch(df)
+    liquidity_highs, liquidity_lows = detect_liquidity_zones(df)
+    
+    signals = []
+    confidence = bos_conf
+    
+    if "BULLISH" in bos_cho:
+        signals.append(bos_desc)
+    elif "BEARISH" in bos_cho:
+        signals.append(bos_desc)
+    
+    if liquidity_highs:
+        signals.append(f"Liquidity above: Rp{min(liquidity_highs):,.0f}")
+        confidence += 10
+    
+    if liquidity_lows:
+        signals.append(f"Liquidity below: Rp{max(liquidity_lows):,.0f}")
+        confidence += 10
+    
+    result = bos_cho if "BOS" in bos_cho or "CHOCH" in bos_cho else "RANGE"
     
     desc = " | ".join(signals) if signals else "No structure signal"
-    return structure, min(100, confidence), desc
+    return result, min(100, confidence), desc
+
+# ========== MARKET REGIME ==========
+def detect_market_regime(df):
+    if df.empty or len(df) < 30:
+        return "UNKNOWN", 0, "Data tidak cukup"
+    
+    last = df.iloc[-1]
+    prev_20 = df.iloc[-21:-1]
+    
+    adx = last.get('adx', 0)
+    atr_pct = (last['atr'] / last['close']) * 100 if last['close'] > 0 else 0
+    volume_ratio = last['volume_ratio']
+    daily_change = (last['close'] - prev_20['close'].iloc[0]) / prev_20['close'].iloc[0] * 100 if prev_20['close'].iloc[0] > 0 else 0
+    
+    regime = "NEUTRAL"
+    confidence = 50
+    desc = ""
+    
+    if adx >= 25:
+        regime = "TRENDING"
+        confidence = 70 + min(10, adx - 25)
+        desc = f"Tren kuat (ADX {adx:.0f})"
+    elif adx < 20:
+        regime = "SIDEWAYS"
+        confidence = 40
+        desc = f"Pasar ranging (ADX {adx:.0f})"
+    
+    if atr_pct > 4:
+        regime = "VOLATILE"
+        confidence = 60
+        desc = f"Volatilitas tinggi (ATR {atr_pct:.1f}%)"
+    
+    if daily_change < -5 or volume_ratio > 2.5:
+        regime = "PANIC"
+        confidence = 80
+        desc = "Kondisi panic selling! Hati-hati!"
+    
+    if adx >= 35 and atr_pct > 3:
+        regime = "STRONG_TRENDING"
+        confidence = 85
+        desc = f"Tren sangat kuat (ADX {adx:.0f}, Vol {atr_pct:.1f}%)"
+    
+    return regime, confidence, desc
 
 # ========== SMART MONEY VOLUME ==========
 def detect_smart_money_volume(df):
@@ -413,7 +663,6 @@ def detect_candlestick_pattern(df):
     body = abs(last['close'] - last['open'])
     candle_range = last['high'] - last['low']
     
-    # Hindari division by zero
     if candle_range <= 0:
         return "NONE", 0, "Candle range zero"
     
@@ -424,7 +673,6 @@ def detect_candlestick_pattern(df):
     confidence = 0
     pattern = "NONE"
     
-    # Marubozu
     if body / candle_range > 0.85:
         if last['close'] > last['open']:
             pattern = "BULLISH_MARUBOZU"
@@ -435,80 +683,30 @@ def detect_candlestick_pattern(df):
             confidence -= 30
             signals.append("Bearish Marubozu")
     
-    # Hammer
     if lower_wick > body * 2 and upper_wick < body:
         pattern = "HAMMER"
         confidence += 35
         signals.append("Hammer / Pinbar")
     
-    # Shooting Star
     if upper_wick > body * 2 and lower_wick < body:
         pattern = "SHOOTING_STAR"
         confidence -= 35
         signals.append("Shooting Star")
     
-    # Engulfing
-    if (last['close'] > last['open'] and 
-        prev['close'] < prev['open'] and
-        last['close'] > prev['open'] and 
-        last['open'] < prev['close']):
+    if (last['close'] > last['open'] and prev['close'] < prev['open'] and
+        last['close'] > prev['open'] and last['open'] < prev['close']):
         pattern = "BULLISH_ENGULFING"
         confidence += 40
         signals.append("Bullish Engulfing")
     
-    if (last['close'] < last['open'] and 
-        prev['close'] > prev['open'] and
-        last['open'] > prev['close'] and 
-        last['close'] < prev['open']):
+    if (last['close'] < last['open'] and prev['close'] > prev['open'] and
+        last['open'] > prev['close'] and last['close'] < prev['open']):
         pattern = "BEARISH_ENGULFING"
         confidence -= 40
         signals.append("Bearish Engulfing")
     
     desc = " | ".join(signals) if signals else "No pattern"
     return pattern, confidence, desc
-
-# ========== MARKET REGIME ==========
-def detect_market_regime(df):
-    if df.empty or len(df) < 30:
-        return "UNKNOWN", 0, "Data tidak cukup"
-    
-    last = df.iloc[-1]
-    prev_20 = df.iloc[-21:-1]
-    
-    adx = last.get('adx', 0)
-    atr_pct = (last['atr'] / last['close']) * 100 if last['close'] > 0 else 0
-    volume_ratio = last['volume_ratio']
-    daily_change = (last['close'] - prev_20['close'].iloc[0]) / prev_20['close'].iloc[0] * 100 if prev_20['close'].iloc[0] > 0 else 0
-    
-    regime = "NEUTRAL"
-    confidence = 50
-    desc = ""
-    
-    if adx >= 25:
-        regime = "TRENDING"
-        confidence = 70 + min(10, adx - 25)
-        desc = f"Tren kuat (ADX {adx:.0f})"
-    elif adx < 20:
-        regime = "SIDEWAYS"
-        confidence = 40
-        desc = f"Pasar ranging (ADX {adx:.0f})"
-    
-    if atr_pct > 4:
-        regime = "VOLATILE"
-        confidence = 60
-        desc = f"Volatilitas tinggi (ATR {atr_pct:.1f}%)"
-    
-    if daily_change < -5 or volume_ratio > 2.5:
-        regime = "PANIC"
-        confidence = 80
-        desc = "Kondisi panic selling! Hati-hati!"
-    
-    if adx >= 35 and atr_pct > 3:
-        regime = "STRONG_TRENDING"
-        confidence = 85
-        desc = f"Tren sangat kuat (ADX {adx:.0f}, Vol {atr_pct:.1f}%)"
-    
-    return regime, confidence, desc
 
 # ========== PIVOT SUPPORT RESISTANCE ==========
 def get_pivot_sr(df, lookback=20):
@@ -537,9 +735,128 @@ def get_pivot_sr(df, lookback=20):
     
     return rolling_support, rolling_resistance, pivot, r1, r2, s1, s2, fib_382, fib_618
 
-# ========== ENTRY, SL, TP DARI INDIKATOR (RETURN 8 NILAI) ==========
+# ========== CONFIDENCE SCORE DENGAN BOBOT BARU ==========
+def calculate_confidence_score(df, ihsg_score=50):
+    if df.empty or len(df) < 30:
+        return 50, [], "NORMAL"
+    
+    last = df.iloc[-1]
+    factors = []
+    total = 50
+    
+    # 1. STRUCTURE SCORE (20%) - BARU
+    structure, struct_conf, struct_desc = detect_market_structure(df)
+    if "BULLISH" in structure:
+        total += struct_conf * 0.20
+        factors.append(("Structure", struct_conf * 0.20, structure))
+    elif "BEARISH" in structure:
+        total -= struct_conf * 0.20
+        factors.append(("Structure", -struct_conf * 0.20, structure))
+    else:
+        factors.append(("Structure", 0, "Neutral"))
+    
+    # 2. FVG SCORE (10%) - BARU
+    nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
+    fvg_score = 0
+    if nearest_bullish_fvg:
+        dist_pct = (nearest_bullish_fvg['upper'] - last['close']) / last['close'] * 100
+        if dist_pct < 2:
+            fvg_score = 15
+            factors.append(("FVG", 15, "Bullish FVG dekat"))
+        else:
+            fvg_score = 5
+            factors.append(("FVG", 5, "Bullish FVG ada"))
+    elif nearest_bearish_fvg:
+        dist_pct = (last['close'] - nearest_bearish_fvg['lower']) / last['close'] * 100
+        if dist_pct < 2:
+            fvg_score = -15
+            factors.append(("FVG", -15, "Bearish FVG dekat"))
+        else:
+            fvg_score = -5
+            factors.append(("FVG", -5, "Bearish FVG ada"))
+    total += fvg_score
+    
+    # 3. ORDER BLOCK SCORE (10%) - BARU
+    nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
+    ob_score = 0
+    if nearest_bullish_ob:
+        dist_pct = (nearest_bullish_ob['high'] - last['close']) / last['close'] * 100
+        if dist_pct < 2:
+            ob_score = 15
+            factors.append(("Order Block", 15, "Bullish OB dekat"))
+        else:
+            ob_score = 5
+            factors.append(("Order Block", 5, "Bullish OB ada"))
+    elif nearest_bearish_ob:
+        dist_pct = (last['close'] - nearest_bearish_ob['low']) / last['close'] * 100
+        if dist_pct < 2:
+            ob_score = -15
+            factors.append(("Order Block", -15, "Bearish OB dekat"))
+        else:
+            ob_score = -5
+            factors.append(("Order Block", -5, "Bearish OB ada"))
+    total += ob_score
+    
+    # 4. TREND SCORE (10%) - DITURUNKAN dari 15%
+    if last['ema20'] > last['ema50']:
+        total += 10
+        factors.append(("Trend", 10, "Bullish"))
+    else:
+        total -= 10
+        factors.append(("Trend", -10, "Bearish"))
+    
+    # 5. MOMENTUM SCORE (5%) - DITURUNKAN dari 15%
+    if last['macd_histogram'] > 0 and last['rsi'] > 50:
+        total += 5
+        factors.append(("Momentum", 5, "Bullish"))
+    elif last['macd_histogram'] < 0 and last['rsi'] < 50:
+        total -= 5
+        factors.append(("Momentum", -5, "Bearish"))
+    
+    # 6. VOLUME SCORE (15%) - TETAP
+    if last['volume_ratio'] >= 1.5:
+        total += 15
+        factors.append(("Volume", 15, f"Spike ({last['volume_ratio']:.1f}x)"))
+    elif last['volume_ratio'] < 0.6:
+        total -= 10
+        factors.append(("Volume", -10, f"Sepi"))
+    
+    # 7. VOLATILITY SCORE (5%) - DITURUNKAN dari 10%
+    if last['adx'] >= 25:
+        total += 5
+        factors.append(("ADX", 5, f"Strong ({last['adx']:.0f})"))
+    elif last['adx'] < 20:
+        total -= 5
+        factors.append(("ADX", -5, f"Sideways"))
+    
+    # 8. REGIME SCORE (10%) - TETAP
+    regime, regime_conf, _ = detect_market_regime(df)
+    if regime == "TRENDING" or regime == "STRONG_TRENDING":
+        total += regime_conf * 0.10
+        factors.append(("Regime", regime_conf * 0.10, regime))
+    elif regime == "PANIC":
+        total -= regime_conf * 0.10
+        factors.append(("Regime", -regime_conf * 0.10, regime))
+    
+    # 9. MARKET SCORE (5%) - IHSG
+    total += (ihsg_score - 50) * 0.10
+    factors.append(("IHSG", (ihsg_score - 50) * 0.10, f"Score {ihsg_score:.0f}"))
+    
+    final = max(0, min(100, total))
+    
+    if final >= 80:
+        grade = "SNIPER"
+    elif final >= 65:
+        grade = "HIGH"
+    elif final >= 50:
+        grade = "NORMAL"
+    else:
+        grade = "AVOID"
+    
+    return final, factors, grade
+
+# ========== ENTRY, SL, TP DARI INDIKATOR (DENGAN FITUR BARU) ==========
 def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
-    """Entry, Stop Loss, Take Profit dari indikator - RETURN 8 VALUES"""
     if df.empty or len(df) < 30:
         return None, None, None, 0, 0, "NO_SETUP", 0, []
     
@@ -553,6 +870,10 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     regime, regime_conf, regime_desc = detect_market_regime(df)
     support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
     
+    # Fitur baru
+    nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
+    nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
+    
     trend_up = last['ema20'] > last['ema50']
     momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
     volume_spike = last['volume_ratio'] >= 1.5
@@ -565,17 +886,17 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     confidence = 0
     signals = []
     
-    # PRIORITY 1: BULLISH BOS + SMART MONEY
-    if structure in ["BULLISH_BOS", "BULLISH_TREND"] and smart_money == "ACCUMULATION":
+    # PRIORITY 1: BULLISH BOS + FVG + ORDER BLOCK (Smart Money Combo)
+    if "BULLISH" in structure and nearest_bullish_fvg and nearest_bullish_ob:
         entry_price = last['close'] * 1.001
-        stop_loss = min(last['low'], s1) - (0.5 * atr)
-        take_profit = last['close'] + (3 * atr)
-        setup_name = "SMART_MONEY_BUY"
+        stop_loss = entry_price - (1.5 * atr)
+        take_profit = entry_price + (3 * atr)
+        setup_name = "SMART_MONEY_COMBO_BUY"
         confidence = 85
-        signals = [struct_desc, sm_desc]
+        signals = [struct_desc, "FVG detected", "OB detected"]
     
     # PRIORITY 2: BULLISH BOS + VOLUME SPIKE
-    elif structure in ["BULLISH_BOS", "BULLISH_TREND"] and volume_spike:
+    elif "BULLISH" in structure and volume_spike:
         entry_price = last['close'] * 1.001
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
@@ -601,23 +922,32 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         confidence = sweep_conf
         signals = [sweep_desc]
     
-    # PRIORITY 5: TREND BUY
+    # PRIORITY 5: FVG BUY (harga mendekati bullish FVG)
+    elif nearest_bullish_fvg and (nearest_bullish_fvg['upper'] - last['close']) / last['close'] < 0.02:
+        entry_price = last['close']
+        stop_loss = entry_price - (1.5 * atr)
+        take_profit = entry_price + (2.5 * atr)
+        setup_name = "FVG_BUY"
+        confidence = 70
+        signals = ["Near Fair Value Gap"]
+    
+    # PRIORITY 6: ORDER BLOCK BUY
+    elif nearest_bullish_ob and (nearest_bullish_ob['high'] - last['close']) / last['close'] < 0.02:
+        entry_price = last['close']
+        stop_loss = entry_price - (1.5 * atr)
+        take_profit = entry_price + (2.5 * atr)
+        setup_name = "ORDER_BLOCK_BUY"
+        confidence = 70
+        signals = ["Near Order Block"]
+    
+    # PRIORITY 7: TREND BUY
     elif trend_up and strong_trend and momentum_bullish:
         entry_price = last['close']
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "TREND_BUY"
-        confidence = 70
+        confidence = 60
         signals = ["Strong uptrend"]
-    
-    # PRIORITY 6: SUPPORT BOUNCE
-    elif trend_up and last['close'] <= resistance:
-        entry_price = support
-        stop_loss = entry_price - (1.5 * atr)
-        take_profit = entry_price + (2.5 * atr)
-        setup_name = "SUPPORT_BOUNCE_BUY"
-        confidence = 65
-        signals = ["Pullback to support"]
     
     else:
         return None, None, None, 0, 0, "NO_SETUP", 0, []
@@ -637,13 +967,33 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     
     return None, None, None, 0, 0, "NO_SETUP", 0, []
 
+def detect_high_quality_setup(df):
+    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
+    if entry:
+        if conf >= 80:
+            return f"{setup} (SNIPER)", conf, " | ".join(signals)
+        elif conf >= 65:
+            return f"{setup} (HIGH)", conf, " | ".join(signals)
+        else:
+            return setup, conf, " | ".join(signals)
+    return "NO_SETUP", 0, "Tidak ada setup"
+
+def get_trading_recommendation(df):
+    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
+    if entry:
+        if conf >= 80:
+            return f"🎯 {setup} - Sniper eksekusi dengan RR 1:{rr:.1f}"
+        elif conf >= 70:
+            return f"📈 {setup} - Setup bagus, pastikan konfirmasi"
+        elif conf >= 60:
+            return f"⏸️ {setup} - Tunggu konfirmasi lebih lanjut"
+        else:
+            return f"📊 {setup} - Setup medium, hati-hati"
+    return "⛔ NO TRADE ZONE - Hindari entry"
+
 # ========== MULTI TIMEFRAME ALIGNMENT ==========
 def get_multi_timeframe_alignment(symbol, capital=100000000, risk_percent=2):
-    timeframes = {
-        "daily": "1d",
-        "hourly": "60m",
-        "fifteen": "15m"
-    }
+    timeframes = {"daily": "1d", "hourly": "60m", "fifteen": "15m"}
     
     results = {}
     alignment_score = 0
@@ -700,84 +1050,6 @@ def get_multi_timeframe_alignment(symbol, capital=100000000, risk_percent=2):
         alignment = "INSUFFICIENT_DATA"
     
     return results, alignment, alignment_score, signals
-
-# ========== CONFIDENCE SCORE ==========
-def calculate_confidence_score(df, ihsg_score=50):
-    if df.empty or len(df) < 30:
-        return 50, [], "NORMAL"
-    
-    last = df.iloc[-1]
-    factors = []
-    total = 50
-    
-    if last['ema20'] > last['ema50']:
-        total += 15
-        factors.append(("Trend", 15, "Bullish"))
-    else:
-        total -= 15
-        factors.append(("Trend", -15, "Bearish"))
-    
-    if last['adx'] >= 25:
-        total += 15
-        factors.append(("ADX", 15, "Strong"))
-    elif last['adx'] >= 20:
-        total += 5
-        factors.append(("ADX", 5, "Weak"))
-    else:
-        total -= 10
-        factors.append(("ADX", -10, "Sideways"))
-    
-    if last['volume_ratio'] >= 1.5:
-        total += 15
-        factors.append(("Volume", 15, "Spike"))
-    elif last['volume_ratio'] < 0.6:
-        total -= 10
-        factors.append(("Volume", -10, "Sepi"))
-    
-    if last['macd_histogram'] > 0 and last['rsi'] > 50:
-        total += 15
-        factors.append(("Momentum", 15, "Bullish"))
-    elif last['macd_histogram'] < 0 and last['rsi'] < 50:
-        total -= 15
-        factors.append(("Momentum", -15, "Bearish"))
-    
-    total += (ihsg_score - 50) * 0.2
-    final = max(0, min(100, total))
-    
-    if final >= 80:
-        grade = "SNIPER"
-    elif final >= 65:
-        grade = "HIGH"
-    elif final >= 50:
-        grade = "NORMAL"
-    else:
-        grade = "AVOID"
-    
-    return final, factors, grade
-
-def detect_high_quality_setup(df):
-    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
-    if entry:
-        if conf >= 80:
-            return f"{setup} (SNIPER)", conf, " | ".join(signals)
-        elif conf >= 65:
-            return f"{setup} (HIGH)", conf, " | ".join(signals)
-        else:
-            return setup, conf, " | ".join(signals)
-    return "NO_SETUP", 0, "Tidak ada setup"
-
-def get_trading_recommendation(df):
-    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
-    if entry:
-        if conf >= 80:
-            return f"🎯 {setup} - Sniper eksekusi dengan RR 1:{rr:.1f}"
-        elif conf >= 70:
-            return f"📈 {setup} - Setup bagus, pastikan konfirmasi"
-        elif conf >= 60:
-            return f"⏸️ {setup} - Tunggu konfirmasi lebih lanjut"
-        else:
-            return f"📊 {setup} - Setup medium, hati-hati"
-    return "⛔ NO TRADE ZONE - Hindari entry"
 
 def scan_saham():
     stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "TLKM.JK", "ASII.JK"]
