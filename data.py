@@ -32,16 +32,14 @@ def get_data(symbol, timeframe="1d"):
         if timeframe in ["5m", "15m", "30m", "60m"]:
             period = "5d"
         else:
-            period = "1mo"
+            period = "2mo"
         
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         
-        if df.empty:
-            # Coba dengan .JK jika belum ada
-            if not symbol.endswith('.JK'):
-                ticker = yf.Ticker(f"{symbol}.JK")
-                df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
+        if df.empty and not symbol.endswith('.JK'):
+            ticker = yf.Ticker(f"{symbol}.JK")
+            df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         
         if df.empty:
             return pd.DataFrame()
@@ -57,104 +55,40 @@ def get_data(symbol, timeframe="1d"):
         return pd.DataFrame()
 
 def add_indicators(df):
-    """Lengkap dengan semua indikator profesional"""
     if df.empty:
         return df
     df = df.copy()
     
-    # ========== 1. TREND INDICATORS ==========
-    # EMA
+    # ========== TREND INDICATORS ==========
     df['ema10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
-    # Supertrend
-    atr_period = 10
-    multiplier = 3
-    high_low = df['high'] - df['low']
-    high_close = abs(df['high'] - df['close'].shift())
-    low_close = abs(df['low'] - df['close'].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['atr_supertrend'] = tr.rolling(window=atr_period).mean()
-    
-    hl_avg = (df['high'] + df['low']) / 2
-    df['upper_band'] = hl_avg + (multiplier * df['atr_supertrend'])
-    df['lower_band'] = hl_avg - (multiplier * df['atr_supertrend'])
-    
-    df['supertrend'] = 0
-    df['supertrend_direction'] = 1  # 1=up, -1=down
-    
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['upper_band'].iloc[i-1]:
-            df.loc[df.index[i], 'supertrend_direction'] = 1
-        elif df['close'].iloc[i] < df['lower_band'].iloc[i-1]:
-            df.loc[df.index[i], 'supertrend_direction'] = -1
-        else:
-            df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
-        
-        if df['supertrend_direction'].iloc[i] == 1:
-            df.loc[df.index[i], 'supertrend'] = df['lower_band'].iloc[i]
-        else:
-            df.loc[df.index[i], 'supertrend'] = df['upper_band'].iloc[i]
-    
-    # VWAP (Volume Weighted Average Price)
-    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
-    
-    # ========== 2. MOMENTUM INDICATORS ==========
-    # RSI
+    # ========== MOMENTUM ==========
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # MACD
     exp1 = df['close'].ewm(span=12, adjust=False).mean()
     exp2 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
     
-    # Stochastic RSI
-    rsi_min = df['rsi'].rolling(window=14).min()
-    rsi_max = df['rsi'].rolling(window=14).max()
-    df['stoch_rsi_k'] = 100 * (df['rsi'] - rsi_min) / (rsi_max - rsi_min)
-    df['stoch_rsi_d'] = df['stoch_rsi_k'].rolling(window=3).mean()
-    
-    # ROC (Rate of Change)
-    df['roc'] = df['close'].pct_change(periods=10) * 100
-    
-    # ========== 3. VOLUME INDICATORS ==========
+    # ========== VOLUME ==========
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
     
-    # OBV (On Balance Volume)
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i-1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    df['obv'] = obv
-    df['obv_ma'] = df['obv'].rolling(window=20).mean()
-    
-    # ========== 4. VOLATILITY INDICATORS ==========
-    # ATR (Average True Range)
+    # ========== VOLATILITY ==========
+    high_low = df['high'] - df['low']
+    high_close = abs(df['high'] - df['close'].shift())
+    low_close = abs(df['low'] - df['close'].shift())
     df['tr'] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(window=14).mean()
     
-    # Bollinger Bands
-    df['bb_middle'] = df['close'].rolling(window=20).mean()
-    bb_std = df['close'].rolling(window=20).std()
-    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    
-    # ========== 5. TREND STRENGTH ==========
-    # ADX
+    # ========== ADX ==========
     plus_dm = df['high'].diff()
     minus_dm = df['low'].diff()
     plus_dm[plus_dm < 0] = 0
@@ -167,384 +101,281 @@ def add_indicators(df):
     df['plus_di'] = plus_di
     df['minus_di'] = minus_di
     
-    # ========== 6. SUPPORT & RESISTANCE ==========
+    # ========== BOLLINGER BANDS ==========
+    df['bb_middle'] = df['close'].rolling(window=20).mean()
+    bb_std = df['close'].rolling(window=20).std()
+    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+    df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+    
+    # ========== SUPPORT & RESISTANCE ==========
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
     return df
 
-def detect_trend_regime(df):
-    """Deteksi regime pasar: UPTREND, DOWNTREND, SIDEWAYS"""
-    if df.empty or len(df) < 20:
-        return "UNKNOWN", 0
-    
-    last = df.iloc[-1]
-    adx = last.get('adx', 0)
-    if pd.isna(adx):
-        adx = 0
-    
-    ema20 = last.get('ema20', 0)
-    ema50 = last.get('ema50', 0)
-    close = last.get('close', 0)
-    
-    # Trend direction
-    if close > ema20 > ema50:
-        trend_direction = "UPTREND"
-        trend_score = 70
-    elif close < ema20 < ema50:
-        trend_direction = "DOWNTREND"
-        trend_score = 30
-    else:
-        trend_direction = "SIDEWAYS"
-        trend_score = 50
-    
-    # Trend strength
-    if adx >= 25:
-        strength = "STRONG"
-    elif adx >= 20:
-        strength = "WEAK"
-    else:
-        strength = "NO_TREND"
-        trend_direction = "SIDEWAYS"
-    
-    return f"{strength} {trend_direction}".strip(), adx
-
-def calculate_smart_score(df):
-    """Sistem scoring profesional dengan bobot"""
-    if df.empty or len(df) < 30:
-        return 50, {}
-    
-    last = df.iloc[-1]
-    scores = {}
-    
-    # ========== TREND SCORE (35%) ==========
-    trend_score = 50
-    ema20 = last.get('ema20', 0)
-    ema50 = last.get('ema50', 0)
-    close = last.get('close', 0)
-    
-    if close > ema20 > ema50:
-        trend_score = 80
-    elif close > ema20:
-        trend_score = 65
-    elif close < ema20 < ema50:
-        trend_score = 20
-    elif close < ema20:
-        trend_score = 35
-    
-    # Supertrend confirmation
-    if 'supertrend_direction' in last:
-        if last['supertrend_direction'] == 1 and trend_score > 50:
-            trend_score += 10
-        elif last['supertrend_direction'] == -1 and trend_score < 50:
-            trend_score -= 10
-    
-    scores['trend'] = trend_score
-    
-    # ========== MOMENTUM SCORE (25%) ==========
-    momentum_score = 50
-    
-    # RSI
-    rsi = last.get('rsi', 50)
-    if rsi < 30:
-        momentum_score += 20
-    elif rsi < 40:
-        momentum_score += 10
-    elif rsi > 70:
-        momentum_score -= 20
-    elif rsi > 60:
-        momentum_score -= 10
-    
-    # MACD
-    macd_hist = last.get('macd_histogram', 0)
-    if macd_hist > 0:
-        momentum_score += 10
-    else:
-        momentum_score -= 10
-    
-    # Stochastic RSI
-    stoch = last.get('stoch_rsi_k', 50)
-    if stoch < 20:
-        momentum_score += 10
-    elif stoch > 80:
-        momentum_score -= 10
-    
-    scores['momentum'] = max(0, min(100, momentum_score))
-    
-    # ========== VOLUME SCORE (20%) ==========
-    volume_score = 50
-    
-    volume_ratio = last.get('volume_ratio', 1)
-    if volume_ratio > 1.5:
-        volume_score = 80
-    elif volume_ratio > 1.2:
-        volume_score = 65
-    elif volume_ratio < 0.5:
-        volume_score = 30
-    elif volume_ratio < 0.8:
-        volume_score = 40
-    
-    # OBV confirmation
-    obv = last.get('obv', 0)
-    obv_ma = last.get('obv_ma', 0)
-    if obv > obv_ma and volume_score > 50:
-        volume_score += 10
-    elif obv < obv_ma and volume_score < 50:
-        volume_score -= 10
-    
-    scores['volume'] = max(0, min(100, volume_score))
-    
-    # ========== VOLATILITY SCORE (10%) ==========
-    volatility_score = 50
-    atr = last.get('atr', 0)
-    close_price = last.get('close', 1)
-    atr_pct = (atr / close_price) * 100 if close_price > 0 else 0
-    
-    if 1.5 <= atr_pct <= 3:
-        volatility_score = 70  # Ideal volatility
-    elif atr_pct < 1:
-        volatility_score = 40  # Too quiet
-    elif atr_pct > 5:
-        volatility_score = 30  # Too volatile
-    
-    scores['volatility'] = volatility_score
-    
-    # ========== MARKET SCORE (10%) ==========
-    market_score = 50
-    
-    # Bollinger Band position
-    bb_pos = last.get('bb_position', 0.5)
-    if bb_pos < 0.2:
-        market_score = 80  # Oversold
-    elif bb_pos > 0.8:
-        market_score = 20  # Overbought
-    
-    scores['market'] = market_score
-    
-    # ========== FINAL WEIGHTED SCORE ==========
-    final_score = (
-        trend_score * 0.35 +
-        momentum_score * 0.25 +
-        volume_score * 0.20 +
-        volatility_score * 0.10 +
-        market_score * 0.10
-    )
-    
-    return max(0, min(100, final_score)), scores
-
-def get_signal_label(score):
-    if score >= 75: return ("STRONG BUY", "green", "🔥")
-    elif score >= 60: return ("BUY", "lightgreen", "📈")
-    elif score >= 45: return ("NEUTRAL", "gray", "⏸️")
-    elif score >= 30: return ("SELL", "orange", "📉")
-    else: return ("STRONG SELL", "red", "🔴")
-
-def get_confidence_level(score):
-    if score >= 75: return ("Sangat Tinggi", "green")
-    elif score >= 60: return ("Tinggi", "lightgreen")
-    elif score >= 45: return ("Sedang", "yellow")
-    elif score >= 30: return ("Rendah", "orange")
-    else: return ("Sangat Rendah", "red")
-
-def get_market_regime(df):
-    """Market regime dengan ATR dan ADX"""
-    if df.empty or len(df) < 20:
-        return {
-            "regime": "UNKNOWN",
-            "adx": 0,
-            "atr": 0,
-            "atr_pct": 0,
-            "color": "gray",
-            "description": "Data tidak cukup",
-            "trading_allowed": True
-        }
-    
-    last = df.iloc[-1]
-    adx = last.get('adx', 0)
-    if pd.isna(adx):
-        adx = 0
-    
-    atr = last.get('atr', 0)
-    close = last.get('close', 1)
-    atr_pct = (atr / close) * 100
-    
-    # Determine regime
-    if adx >= 25:
-        if atr_pct > 4:
-            regime = "TRENDING + HIGH VOLATILITY"
-            color = "orange"
-            desc = "⚠️ Tren kuat tapi volatilitas tinggi"
-            trading_allowed = True
-        elif atr_pct > 2:
-            regime = "TRENDING + MODERATE VOL"
-            color = "#87CEEB"
-            desc = "✅ Kondisi ideal untuk trading"
-            trading_allowed = True
-        else:
-            regime = "STRONG TRENDING"
-            color = "green"
-            desc = "✅ Tren kuat, sinyal valid"
-            trading_allowed = True
-    elif adx >= 20:
-        regime = "WEAK TREND"
-        color = "yellow"
-        desc = "⚠️ Tren mulai terbentuk"
-        trading_allowed = True
-    elif adx >= 15:
-        regime = "RANGING (SIDEWAYS)"
-        color = "orange"
-        desc = "⚠️ Pasar sideways, hati-hati sinyal palsu"
-        trading_allowed = False
-    else:
-        regime = "STRONG RANGING"
-        color = "red"
-        desc = "🔴 Hindari trading, tunggu breakout"
-        trading_allowed = False
-    
-    # Check extreme volatility
-    if atr_pct > 6 and adx < 25:
-        regime = "EXTREME VOLATILITY"
-        color = "red"
-        desc = "🔴 Volatilitas ekstrim! Jangan trading!"
-        trading_allowed = False
-    
-    return {
-        "regime": regime,
-        "adx": round(adx, 1),
-        "atr": round(atr, 0),
-        "atr_pct": round(atr_pct, 2),
-        "color": color,
-        "description": desc,
-        "trading_allowed": trading_allowed
-    }
-
-def get_smart_entry_signal(df):
-    """Deteksi breakout, pullback, dan fake breakout"""
-    if df.empty or len(df) < 30:
-        return "NO_SIGNAL", ""
-    
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    
-    support = last.get('support', 0)
-    resistance = last.get('resistance', float('inf'))
-    volume_ratio = last.get('volume_ratio', 1)
-    
-    # Breakout valid
-    if last['close'] > resistance and volume_ratio > 2:
-        return "BREAKOUT_BUY", f"Breakout resistance dengan volume {volume_ratio:.1f}x normal"
-    
-    # Breakdown valid  
-    if last['close'] < support and volume_ratio > 2:
-        return "BREAKOUT_SELL", f"Breakdown support dengan volume {volume_ratio:.1f}x normal"
-    
-    # Fake breakout detection
-    if (prev['close'] > resistance and last['close'] < resistance):
-        return "FAKE_BREAKOUT", "Fake breakout detected! Hati-hati"
-    
-    # Pullback to EMA
-    ema20 = last.get('ema20', 0)
-    if abs(last['close'] - ema20) / ema20 < 0.02:  # Within 2% of EMA20
-        if last['rsi'] > 40 and last['rsi'] < 60:
-            return "PULLBACK", "Pullback ke EMA20, opportunity entry"
-    
-    return "NO_SIGNAL", ""
-
-def calculate_position_size(capital, entry_price, stop_loss_price, risk_percent=2):
-    """Hitung position sizing berdasarkan risk management"""
-    if entry_price <= stop_loss_price:
-        return 0
-    
-    risk_amount = capital * (risk_percent / 100)
-    risk_per_share = entry_price - stop_loss_price
-    shares = risk_amount / risk_per_share
-    
-    return int(shares)
-
-def calculate_ihsg_filter():
-    """Filter berdasarkan IHSG (market breadth)"""
+# ========== MARKET FILTER (IHSG) ==========
+def get_ihsg_trend():
+    """Detect IHSG trend - KRUSIAL untuk market Indonesia"""
     try:
         ihsg = get_data("^JKSE", "1d")
-        if not ihsg.empty:
-            ihsg = add_indicators(ihsg)
-            ihsg_score, _ = calculate_smart_score(ihsg)
-            
-            if ihsg_score >= 60:
-                return 0, "IHSG positif (+0%)"
-            elif ihsg_score >= 45:
-                return -5, "IHSG netral (-5%)"
-            else:
-                return -15, "IHSG negatif (-15%)"
-    except:
-        return 0, "IHSG tidak tersedia"
-    
-    return 0, ""
-
-def multi_timeframe_analysis(symbol):
-    timeframes = ["5m", "15m", "30m", "60m", "1d"]
-    scores = {}
-    
-    for tf in timeframes:
-        df = get_data(symbol, tf)
-        if not df.empty and len(df) > 10:
-            df = add_indicators(df)
-            score, _ = calculate_smart_score(df)
-            scores[tf] = score
+        if ihsg.empty or len(ihsg) < 20:
+            return "NEUTRAL", 0, "Data IHSG tidak cukup"
+        
+        ihsg = add_indicators(ihsg)
+        last = ihsg.iloc[-1]
+        prev = ihsg.iloc[-2]
+        
+        # IHSG trend direction
+        ema20 = last.get('ema20', 0)
+        ema50 = last.get('ema50', 0)
+        close = last.get('close', 0)
+        
+        if close > ema20 > ema50:
+            trend = "BULLISH"
+            score = 70
+        elif close < ema20 < ema50:
+            trend = "BEARISH"
+            score = 30
         else:
-            scores[tf] = 50
-        time.sleep(0.5)
+            trend = "SIDEWAYS"
+            score = 50
+        
+        # Daily change
+        daily_change = ((close - prev['close']) / prev['close']) * 100
+        
+        return trend, score, f"IHSG {trend} ({daily_change:+.1f}%)"
     
-    weights = {"5m": 0.05, "15m": 0.10, "30m": 0.15, "60m": 0.20, "1d": 0.50}
-    weighted = sum(scores[tf] * weights.get(tf, 0.2) for tf in timeframes if tf in scores)
-    
-    return {**scores, "weighted": weighted, "filtered": False}
+    except:
+        return "NEUTRAL", 50, "IHSG data unavailable"
 
-def scan_saham():
-    stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "UNVR.JK", "ADRO.JK", "ICBP.JK"]
-    results = []
+def get_ihsg_filter_penalty():
+    """Return penalty/bonus based on IHSG condition"""
+    trend, score, msg = get_ihsg_trend()
     
-    for stock in stocks:
-        try:
-            df = get_data(stock, "1d")
-            if not df.empty and len(df) > 20:
-                df = add_indicators(df)
-                score, _ = calculate_smart_score(df)
-                signal, _, emoji = get_signal_label(score)
-                results.append({
-                    "Kode": stock,
-                    "Score": f"{score:.0f}",
-                    "Sinyal": f"{emoji} {signal}",
-                    "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
-                })
-            time.sleep(1)
-        except Exception as e:
-            print(f"Error scan {stock}: {e}")
-            continue
-    
-    results.sort(key=lambda x: int(x['Score']), reverse=True)
-    return results
-
-def get_trading_recommendation(score, df):
-    regime = get_market_regime(df)
-    
-    if not regime["trading_allowed"]:
-        return f"⛔ HINDARI TRADING - {regime['description']}"
-    
-    if score >= 75:
-        return "🔥 BELI AGGRESIF - Semua indikator konfirmasi uptrend kuat"
-    elif score >= 60:
-        return "📈 BELI - Momentum positif, gunakan stop loss ATR"
-    elif score <= 25:
-        return "🔴 JUAL AGGRESIF - Tren turun kuat, cut loss"
-    elif score <= 40:
-        return "📉 JUAL - Tekanan bearish, pertimbangkan cut"
+    if trend == "BEARISH":
+        return -20, f"⚠️ IHSG Bearish! Turunkan ekspektasi ({msg})"
+    elif trend == "SIDEWAYS":
+        return -10, f"📊 IHSG Sideways, selektif ({msg})"
     else:
-        return "⏸️ HOLD/TUNGGU - Kondisi sideways, tunggu sinyal jelas"
+        return 0, f"✅ IHSG Bullish mendukung ({msg})"
 
-def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee=0.0015):
-    """Backtest realistis dengan fee, slippage, dan position sizing"""
+# ========== HIGH QUALITY SETUP DETECTOR ==========
+def detect_high_quality_setup(df):
+    """
+    HANYA trading setup berkualitas tinggi
+    Menggunakan CONFLUENCE (banyak konfirmasi)
+    """
     if df.empty or len(df) < 30:
-        return {"return": 0, "winrate": 0, "trades": 0, "final_capital": initial_capital, "max_drawdown": 0}
+        return "NO_SETUP", 0, "Data tidak cukup"
+    
+    last = df.iloc[-1]
+    
+    # ========== TREND FILTER ==========
+    trend_up = last['ema20'] > last['ema50']
+    trend_down = last['ema20'] < last['ema50']
+    ema_aligned = last['close'] > last['ema20'] > last['ema50'] if trend_up else last['close'] < last['ema20'] < last['ema50']
+    
+    # ADX untuk kekuatan trend (hindari sideways)
+    adx = last.get('adx', 0)
+    strong_trend = adx >= 25
+    weak_trend = adx < 20
+    
+    # ========== MOMENTUM FILTER ==========
+    momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 55
+    momentum_bearish = last['macd_histogram'] < 0 and last['rsi'] < 45
+    rsi_extreme = last['rsi'] < 30 or last['rsi'] > 70
+    
+    # ========== VOLUME FILTER ==========
+    volume_spike = last['volume_ratio'] >= 1.5
+    volume_normal = 0.8 <= last['volume_ratio'] <= 1.5
+    volume_silent = last['volume_ratio'] < 0.6
+    
+    # ========== NO TRADE ZONE (PENTING!) ==========
+    no_trade_sideways = (adx < 20) or (45 < last['rsi'] < 55 and not volume_spike)
+    no_trade_silent = volume_silent
+    no_trade_ema_flat = abs(last['ema20'] - last['ema50']) / last['ema50'] < 0.01
+    
+    if no_trade_sideways or no_trade_silent or no_trade_ema_flat:
+        return "NO_TRADE_ZONE", 0, "Kondisi pasar tidak ideal untuk trading"
+    
+    # ========== HIGH QUALITY BUY SETUP ==========
+    high_quality_buy = (
+        trend_up and ema_aligned and strong_trend and
+        momentum_bullish and volume_spike
+    )
+    
+    # ========== HIGH QUALITY SELL SETUP ==========
+    high_quality_sell = (
+        trend_down and ema_aligned and strong_trend and
+        momentum_bearish and volume_spike
+    )
+    
+    # ========== SNIPER SETUP (Extra Quality) ==========
+    sniper_buy = high_quality_buy and rsi_extreme and last['rsi'] < 30
+    sniper_sell = high_quality_sell and rsi_extreme and last['rsi'] > 70
+    
+    if sniper_buy:
+        return "SNIPER_BUY", 95, "Setup langka berkualitas sangat tinggi!"
+    elif sniper_sell:
+        return "SNIPER_SELL", 95, "Setup langka berkualitas sangat tinggi!"
+    elif high_quality_buy:
+        return "HIGH_QUALITY_BUY", 85, "Setup berkualitas tinggi - eksekusi"
+    elif high_quality_sell:
+        return "HIGH_QUALITY_SELL", 85, "Setup berkualitas tinggi - eksekusi"
+    elif trend_up and momentum_bullish:
+        return "NORMAL_BUY", 65, "Setup bagus tapi tunggu konfirmasi"
+    elif trend_down and momentum_bearish:
+        return "NORMAL_SELL", 65, "Setup bagus tapi tunggu konfirmasi"
+    else:
+        return "NO_SETUP", 0, "Tidak ada setup berkualitas"
+
+# ========== RISK REWARD ENGINE ==========
+def calculate_risk_reward(entry_price, stop_loss, take_profit):
+    """Hitung Risk Reward Ratio - KRUSIAL untuk profit konsisten"""
+    risk = abs(entry_price - stop_loss)
+    reward = abs(take_profit - entry_price)
+    
+    if risk == 0:
+        return 0
+    
+    rr_ratio = reward / risk
+    
+    if rr_ratio >= 2:
+        grade = "EXCELLENT"
+        recommendation = "Eksekusi dengan RR 1:2 atau lebih"
+    elif rr_ratio >= 1.5:
+        grade = "GOOD"
+        recommendation = "Bisa dieksekusi"
+    elif rr_ratio >= 1:
+        grade = "FAIR"
+        recommendation = "Hanya jika setup sangat bagus"
+    else:
+        grade = "POOR"
+        recommendation = "SKIP! Risk lebih besar dari reward"
+    
+    return {
+        "ratio": round(rr_ratio, 2),
+        "risk_pct": round((risk / entry_price) * 100, 2),
+        "reward_pct": round((reward / entry_price) * 100, 2),
+        "grade": grade,
+        "recommendation": recommendation
+    }
+
+# ========== CONFIDENCE SCORE ==========
+def calculate_confidence_score(df, ihsg_score=50):
+    """Confidence score 0-100 untuk kualitas setup"""
+    if df.empty or len(df) < 30:
+        return 50, []
+    
+    last = df.iloc[-1]
+    factors = []
+    total_score = 50
+    
+    # Trend factor (30% weight)
+    if last['ema20'] > last['ema50']:
+        total_score += 12
+        factors.append(("Trend", 12, "Bullish"))
+    else:
+        total_score -= 12
+        factors.append(("Trend", -12, "Bearish"))
+    
+    # ADX strength (20% weight)
+    adx = last.get('adx', 0)
+    if adx >= 25:
+        total_score += 15
+        factors.append(("ADX", 15, f"Strong ({adx:.0f})"))
+    elif adx >= 20:
+        total_score += 5
+        factors.append(("ADX", 5, f"Weak ({adx:.0f})"))
+    else:
+        total_score -= 10
+        factors.append(("ADX", -10, f"Sideways ({adx:.0f})"))
+    
+    # Volume confirmation (20% weight)
+    if last['volume_ratio'] >= 1.5:
+        total_score += 15
+        factors.append(("Volume", 15, f"Spike ({last['volume_ratio']:.1f}x)"))
+    elif last['volume_ratio'] >= 1.2:
+        total_score += 8
+        factors.append(("Volume", 8, f"Good ({last['volume_ratio']:.1f}x)"))
+    elif last['volume_ratio'] < 0.6:
+        total_score -= 10
+        factors.append(("Volume", -10, f"Silent ({last['volume_ratio']:.1f}x)"))
+    
+    # Momentum alignment (20% weight)
+    macd_bullish = last['macd_histogram'] > 0
+    rsi_bullish = last['rsi'] > 50
+    
+    if macd_bullish and rsi_bullish:
+        total_score += 15
+        factors.append(("Momentum", 15, "Bullish aligned"))
+    elif not macd_bullish and not rsi_bullish:
+        total_score -= 15
+        factors.append(("Momentum", -15, "Bearish aligned"))
+    
+    # IHSG market filter (10% weight)
+    total_score += (ihsg_score - 50) * 0.2
+    factors.append(("IHSG", (ihsg_score - 50) * 0.2, f"Score {ihsg_score:.0f}"))
+    
+    final_score = max(0, min(100, total_score))
+    
+    if final_score >= 80:
+        grade = "SNIPER"
+    elif final_score >= 65:
+        grade = "HIGH"
+    elif final_score >= 50:
+        grade = "NORMAL"
+    elif final_score >= 35:
+        grade = "LOW"
+    else:
+        grade = "AVOID"
+    
+    return final_score, factors, grade
+
+# ========== SMART POSITION SIZING ==========
+def calculate_smart_position_size(capital, entry_price, stop_loss, risk_percent=2):
+    """Position sizing berdasarkan risk management"""
+    if entry_price <= stop_loss:
+        return 0, 0
+    
+    risk_amount = capital * (risk_percent / 100)
+    risk_per_share = entry_price - stop_loss
+    shares = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
+    
+    # Maksimal 50% modal untuk satu posisi
+    max_shares = int((capital * 0.5) / entry_price)
+    shares = min(shares, max_shares)
+    
+    actual_risk = (shares * risk_per_share / capital) * 100
+    
+    return shares, actual_risk
+
+# ========== PROFIT FACTOR CALCULATION ==========
+def calculate_profit_factor(trades):
+    """Hitung Profit Factor = Gross Profit / Gross Loss"""
+    if not trades:
+        return 0
+    
+    gross_profit = sum([t for t in trades if t > 0])
+    gross_loss = abs(sum([t for t in trades if t < 0]))
+    
+    if gross_loss == 0:
+        return gross_profit if gross_profit > 0 else 0
+    
+    return gross_profit / gross_loss
+
+# ========== BACKTEST REALISTIS ==========
+def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, 
+                       fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
+    """Backtest profesional dengan fee, slippage, dan position sizing"""
+    if df.empty or len(df) < 30:
+        return {
+            "return": 0, "winrate": 0, "trades": 0, 
+            "final_capital": initial_capital, "max_drawdown": 0,
+            "profit_factor": 0, "sharpe_ratio": 0
+        }
     
     df_test = df.copy()
     df_test = add_indicators(df_test)
@@ -552,63 +383,162 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee=0.001
     capital = initial_capital
     position = 0
     trades = []
+    equity_curve = [initial_capital]
     peak_capital = initial_capital
     max_drawdown = 0
     
     for i in range(20, len(df_test)):
-        score, _ = calculate_smart_score(df_test.iloc[:i+1])
-        
-        # Calculate dynamic stop loss based on ATR
-        atr = df_test.iloc[i].get('atr', 0)
+        # Deteksi setup berkualitas
+        setup, quality, _ = detect_high_quality_setup(df_test.iloc[:i+1])
         close = df_test.iloc[i]['close']
-        stop_loss = close - (2 * atr) if close > atr else close * 0.95
+        atr = df_test.iloc[i].get('atr', close * 0.02)
         
-        if score >= 60 and position == 0:
+        # Dynamic stop loss berdasarkan ATR
+        stop_loss = close - (2 * atr) if setup in ["HIGH_QUALITY_BUY", "SNIPER_BUY"] else 0
+        
+        if (setup in ["HIGH_QUALITY_BUY", "SNIPER_BUY"]) and position == 0 and stop_loss > 0:
             # Position sizing
             risk_amount = capital * (risk_per_trade / 100)
             risk_per_share = close - stop_loss
             shares = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
             
             if shares > 0:
-                # With slippage and fee
-                entry_price = close * (1 + 0.0005)  # 0.05% slippage
-                cost = shares * entry_price * (1 + fee)
+                # With slippage & fee
+                entry_price = close * (1 + slippage)
+                cost = shares * entry_price * (1 + fee_buy)
+                
                 if cost <= capital:
                     position = shares
                     capital -= cost
                     entry_price_used = entry_price
+                    stop_loss_used = stop_loss
+                    position_size_used = shares
         
-        elif score <= 40 and position > 0:
-            exit_price = close * (1 - 0.0005)  # slippage
-            proceeds = position * exit_price * (1 - fee)
-            capital += proceeds
+        elif position > 0:
+            # Check stop loss or take profit
+            take_profit = entry_price_used + (3 * atr)
             
-            pnl_pct = ((exit_price - entry_price_used) / entry_price_used) * 100
-            trades.append(pnl_pct)
-            position = 0
+            if close <= stop_loss_used:
+                # Stop loss triggered
+                exit_price = close * (1 - slippage)
+                proceeds = position * exit_price * (1 - fee_sell)
+                capital += proceeds
+                
+                pnl_pct = ((exit_price - entry_price_used) / entry_price_used) * 100
+                trades.append(pnl_pct)
+                position = 0
+                
+            elif close >= take_profit:
+                # Take profit
+                exit_price = close * (1 - slippage)
+                proceeds = position * exit_price * (1 - fee_sell)
+                capital += proceeds
+                
+                pnl_pct = ((exit_price - entry_price_used) / entry_price_used) * 100
+                trades.append(pnl_pct)
+                position = 0
+        
+        # Track equity
+        current_value = capital + (position * close) if position > 0 else capital
+        equity_curve.append(current_value)
+        
+        # Update drawdown
+        if current_value > peak_capital:
+            peak_capital = current_value
+        drawdown = (peak_capital - current_value) / peak_capital * 100
+        max_drawdown = max(max_drawdown, drawdown)
     
-    # Close any open position
+    # Close open position
     if position > 0:
-        exit_price = df_test.iloc[-1]['close'] * (1 - 0.0005)
-        proceeds = position * exit_price * (1 - fee)
+        exit_price = df_test.iloc[-1]['close'] * (1 - slippage)
+        proceeds = position * exit_price * (1 - fee_sell)
         capital += proceeds
     
     # Calculate metrics
     winrate = len([t for t in trades if t > 0]) / len(trades) * 100 if trades else 0
     total_return = ((capital - initial_capital) / initial_capital) * 100
+    profit_factor = calculate_profit_factor(trades)
     
-    # Calculate max drawdown
-    for i in range(len(df_test)):
-        current_value = capital if i == len(df_test)-1 else 0  # Simplified
-        if current_value > peak_capital:
-            peak_capital = current_value
-        drawdown = (peak_capital - current_value) / peak_capital * 100 if peak_capital > 0 else 0
-        max_drawdown = max(max_drawdown, drawdown)
+    # Simple Sharpe Ratio approximation
+    returns = [equity_curve[i] / equity_curve[i-1] - 1 for i in range(1, len(equity_curve))]
+    sharpe = (np.mean(returns) / np.std(returns) * np.sqrt(252)) if np.std(returns) > 0 else 0
     
     return {
         "return": round(total_return, 2),
         "winrate": round(winrate, 2),
         "trades": len(trades),
         "final_capital": round(capital, 0),
-        "max_drawdown": round(max_drawdown, 2)
+        "max_drawdown": round(max_drawdown, 2),
+        "profit_factor": round(profit_factor, 2),
+        "sharpe_ratio": round(sharpe, 2)
     }
+
+# ========== SCAN SAHAM BERKUALITAS ==========
+def scan_saham():
+    """Scan hanya saham berkualitas (blue chips)"""
+    stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK", "UNVR.JK", "INDF.JK", "ICBP.JK"]
+    results = []
+    
+    for stock in stocks:
+        try:
+            df = get_data(stock, "1d")
+            if not df.empty and len(df) > 30:
+                df = add_indicators(df)
+                setup, quality, setup_msg = detect_high_quality_setup(df)
+                
+                # Hanya tampilkan jika ada setup
+                if quality >= 65:
+                    score = quality
+                    if "BUY" in setup:
+                        signal = "🔥 BUY"
+                    elif "SELL" in setup:
+                        signal = "🔴 SELL"
+                    else:
+                        signal = "⏸️ HOLD"
+                    
+                    results.append({
+                        "Kode": stock,
+                        "Score": f"{score:.0f}",
+                        "Setup": setup_msg[:30],
+                        "Sinyal": signal,
+                        "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
+                    })
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error scan {stock}: {e}")
+            continue
+    
+    results.sort(key=lambda x: int(x['Score']), reverse=True)
+    return results[:5]  # Hanya top 5
+
+def multi_timeframe_analysis(symbol):
+    timeframes = ["1h", "4h", "1d"]  # Fokus ke timeframe yang lebih besar
+    scores = {}
+    
+    for tf in timeframes:
+        df = get_data(symbol, tf)
+        if not df.empty and len(df) > 20:
+            df = add_indicators(df)
+            score, _, _ = calculate_confidence_score(df)
+            scores[tf] = score
+        else:
+            scores[tf] = 50
+        time.sleep(0.5)
+    
+    weights = {"1h": 0.2, "4h": 0.3, "1d": 0.5}
+    weighted = sum(scores[tf] * weights.get(tf, 0.33) for tf in timeframes if tf in scores)
+    
+    return {**scores, "weighted": weighted, "filtered": False}
+
+def get_trading_recommendation(df):
+    """Rekomendasi berdasarkan setup berkualitas"""
+    setup, quality, setup_msg = detect_high_quality_setup(df)
+    
+    if quality >= 85:
+        return f"🎯 {setup_msg} - Sniper eksekusi, RR minimal 1:2"
+    elif quality >= 70:
+        return f"📈 {setup_msg} - Setup bagus, pastikan konfirmasi"
+    elif quality >= 55:
+        return f"⏸️ {setup_msg} - Menunggu konfirmasi lebih lanjut"
+    else:
+        return f"⛔ {setup_msg} - NO TRADE ZONE, hindari entry"
