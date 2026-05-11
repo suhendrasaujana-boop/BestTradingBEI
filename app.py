@@ -23,7 +23,9 @@ from data import (
     get_trading_recommendation,
     backtest_strategy,
     scan_saham,
-    get_multi_timeframe_alignment
+    get_multi_timeframe_alignment,
+    get_nearest_fvg,
+    get_nearest_order_block
 )
 
 st.set_page_config(
@@ -33,7 +35,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# SIDEBAR
+# ========== SIDEBAR ==========
 with st.sidebar:
     st.title("🧠 Smart Money Trading")
     st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
@@ -44,9 +46,17 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("💰 Risk Management")
-    
     capital = st.number_input("Modal (Rp)", min_value=1000000, value=100000000, step=1000000)
     risk_percent = st.slider("Risk per Trade (%)", min_value=0.5, max_value=3.0, value=2.0, step=0.5)
+    
+    st.markdown("---")
+    st.subheader("📋 Status Posisi (Opsional)")
+    has_position = st.checkbox("Saya sudah punya posisi di saham ini")
+    entry_price_manual = 0
+    shares_manual = 0
+    if has_position:
+        entry_price_manual = st.number_input("Harga Entry (Rp)", min_value=0, value=0, step=100)
+        shares_manual = st.number_input("Jumlah Saham", min_value=0, value=0, step=100)
     
     st.markdown("---")
     st.info("""
@@ -56,12 +66,13 @@ with st.sidebar:
     - Order Block
     - Liquidity Sweep
     - Multi Timeframe Alignment
+    - Rekomendasi Aksi & Filter Prioritas
     """)
     st.markdown("---")
     auto_refresh = st.checkbox("Auto Refresh (30 detik)", value=False)
     st.caption(f"Update: {datetime.now().strftime('%H:%M:%S')}")
 
-# MAIN CONTENT
+# ========== MAIN CONTENT ==========
 st.title(f"🧠 {symbol} - Smart Money Analysis")
 
 df = get_data(symbol, timeframe)
@@ -74,9 +85,52 @@ df = add_indicators(df)
 last = df.iloc[-1]
 current_price = last['close']
 
-# MARKET FILTER IHSG
-st.markdown("### 📊 Market Filter")
+# === MARKET FILTER IHSG ===
 ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
+
+# === AMBIL DATA DARI INDIKATOR ===
+entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
+support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
+atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 0
+
+# === PRIORITY FILTER (OTOMATIS) ===
+skip_reason = None
+action = "SKIP"
+action_color = "red"
+recommendation_text = ""
+
+# 1. IHSG BEARISH
+if ihsg_trend == "BEARISH":
+    skip_reason = f"IHSG BEARISH ({ihsg_msg.split('(')[-1].replace(')','')}) → Market tidak mendukung"
+# 2. ADX < 20 (sideways)
+elif last['adx'] < 20:
+    skip_reason = f"ADX {last['adx']:.1f} (<20) → Pasar sideways, sinyal palsu tinggi"
+# 3. Jika ada sinyal entry
+elif entry and conf >= 70 and rr >= 1.5:
+    action = "EKSEKUSI BUY"
+    action_color = "green"
+    recommendation_text = f"✅ Setup: {setup} | Confidence {conf:.0f} | RR 1:{rr:.1f}"
+elif entry and conf >= 60:
+    action = "TUNGGU KONFIRMASI"
+    action_color = "orange"
+    recommendation_text = f"⏸️ Setup: {setup} | Confidence {conf:.0f} | Perlu konfirmasi tambahan"
+elif entry:
+    action = "SKIP (KUALITAS RENDAH)"
+    action_color = "red"
+    recommendation_text = f"❌ Setup {setup} tidak memenuhi kriteria"
+else:
+    action = "SKIP (TIDAK ADA SETUP)"
+    action_color = "red"
+    recommendation_text = "Tidak ada setup berkualitas"
+
+# Jika skip_reason ada, override action menjadi SKIP
+if skip_reason:
+    action = "SKIP"
+    action_color = "red"
+    recommendation_text = skip_reason
+
+# === TAMPILAN MARKET FILTER ===
+st.markdown("### 📊 Market Filter")
 if ihsg_trend == "BULLISH":
     st.success(f"✅ {ihsg_msg}")
 elif ihsg_trend == "BEARISH":
@@ -86,12 +140,10 @@ else:
 
 st.markdown("---")
 
-# SMART MONEY DETECTION (5 KOLOM - MENAMBAHKAN FVG & ORDER BLOCK)
+# === SMART MONEY DETECTION (5 KOLOM) ===
 st.markdown("### 🔍 Smart Money Detection")
-
 col1, col2, col3, col4, col5 = st.columns(5)
 
-# 1. Market Structure
 structure, struct_conf, struct_desc = detect_market_structure(df)
 with col1:
     if "BULLISH" in structure:
@@ -102,7 +154,6 @@ with col1:
         st.info(f"**Structure**\n{structure}")
     st.caption(f"Conf: {struct_conf:.0f}%")
 
-# 2. Smart Money Volume
 sm, sm_conf, sm_desc = detect_smart_money_volume(df)
 with col2:
     if sm == "ACCUMULATION":
@@ -113,21 +164,16 @@ with col2:
         st.info(f"**Smart Money**\n{sm}")
     st.caption(f"Conf: {sm_conf:.0f}%")
 
-# 3. Liquidity Sweep
 is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
 with col3:
     if sweep_type == "BULLISH_SFP":
         st.success(f"**Liquidity**\n{sweep_type}")
     elif sweep_type == "BEARISH_SFP":
         st.error(f"**Liquidity**\n{sweep_type}")
-    elif sweep_type == "FAKE_BREAKOUT":
-        st.warning(f"**Liquidity**\n{sweep_type}")
     else:
         st.info(f"**Liquidity**\nTidak ada")
     st.caption(f"Conf: {sweep_conf:.0f}%")
 
-# 4. Fair Value Gap (BARU)
-from data import get_nearest_fvg
 nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
 with col4:
     if nearest_bullish_fvg:
@@ -140,8 +186,6 @@ with col4:
         st.info(f"**FVG**\nNo gap")
         st.caption("-")
 
-# 5. Order Block (BARU)
-from data import get_nearest_order_block
 nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
 with col5:
     if nearest_bullish_ob:
@@ -156,10 +200,9 @@ with col5:
 
 st.markdown("---")
 
-# MARKET REGIME
+# === MARKET REGIME ===
 st.markdown("### 📈 Market Regime")
 regime, regime_conf, regime_desc = detect_market_regime(df)
-
 col_r1, col_r2, col_r3 = st.columns(3)
 with col_r1:
     st.metric("Regime", regime)
@@ -172,10 +215,8 @@ st.caption(regime_desc)
 
 st.markdown("---")
 
-# PIVOT SUPPORT RESISTANCE
+# === PIVOT SUPPORT RESISTANCE ===
 st.markdown("### 📊 Pivot Support & Resistance")
-support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
-
 col_sr1, col_sr2, col_sr3, col_sr4 = st.columns(4)
 with col_sr1:
     st.metric("Support", f"Rp{support:,.0f}")
@@ -188,11 +229,8 @@ with col_sr4:
 
 st.markdown("---")
 
-# ENTRY, SL, TP DARI INDIKATOR
+# === ENTRY, SL, TP DARI INDIKATOR ===
 st.markdown("### 🎯 Entry - Stop Loss - Take Profit (Dari Indikator)")
-
-entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
-
 if entry:
     if "BUY" in setup:
         st.success(f"### 🔥 {setup}")
@@ -217,22 +255,72 @@ if entry:
     
     if signals:
         st.caption(" | ".join(signals[:3]))
-    
-    if conf >= 70 and rr >= 1.5:
-        st.success("✅ REKOMENDASI: EKSEKUSI")
-    elif conf >= 60:
-        st.info("⏸️ REKOMENDASI: TUNGGU KONFIRMASI")
-    else:
-        st.warning("⛔ REKOMENDASI: SKIP")
 else:
     st.warning("⛔ Tidak ada setup trading berkualitas saat ini")
 
 st.markdown("---")
 
-# CONFIDENCE SCORE
+# === TARGET HARGA ALTERNATIF (3 LEVEL) ===
+if entry and atr > 0:
+    st.markdown("### 🎯 Target Harga Alternatif")
+    target1 = entry + (1.5 * atr)   # RR 1:1.5
+    target2 = entry + (2 * atr)     # RR 1:2
+    target3 = entry + (3 * atr)     # RR 1:3 (sudah ada di TP utama)
+    col_t1, col_t2, col_t3 = st.columns(3)
+    with col_t1:
+        st.metric("Target 1 (Konservatif)", f"Rp{target1:,.0f}", delta="RR 1:1.5")
+    with col_t2:
+        st.metric("Target 2 (Moderat)", f"Rp{target2:,.0f}", delta="RR 1:2")
+    with col_t3:
+        st.metric("Target 3 (Agresif)", f"Rp{target3:,.0f}", delta="RR 1:3")
+
+# === STATUS POSISI (jika sudah punya) ===
+if has_position and entry_price_manual > 0 and shares_manual > 0:
+    st.markdown("---")
+    st.markdown("### 📋 Status Posisi Anda")
+    pnl_percent = ((current_price - entry_price_manual) / entry_price_manual) * 100
+    pnl_nominal = (current_price - entry_price_manual) * shares_manual
+    col_p1, col_p2, col_p3 = st.columns(3)
+    with col_p1:
+        st.metric("Entry Price", f"Rp{entry_price_manual:,.0f}")
+    with col_p2:
+        st.metric("Current Price", f"Rp{current_price:,.0f}")
+    with col_p3:
+        if pnl_percent >= 0:
+            st.metric("Profit/Loss", f"+{pnl_percent:.2f}%", delta=f"+Rp{pnl_nominal:,.0f}")
+        else:
+            st.metric("Profit/Loss", f"{pnl_percent:.2f}%", delta=f"-Rp{abs(pnl_nominal):,.0f}")
+    
+    # Rekomendasi posisi
+    if pnl_percent > 5:
+        st.success("✅ Posisi sudah aman, pertimbangkan trailing stop")
+    elif pnl_percent > 0:
+        st.info("📈 Posisi positif, tahan dengan stop loss di entry")
+    elif pnl_percent > -5:
+        st.warning("⚠️ Posisi sedikit rugi, pantau support terdekat")
+    else:
+        st.error("🔴 Posisi rugi besar, pertimbangkan cut loss")
+
+# === PERINGATAN RISIKO ===
+st.markdown("---")
+st.markdown("### ⚠️ Peringatan Risiko")
+if entry and sl:
+    risk_amount = (entry - sl) * shares
+    st.caption(f"• Stop Loss: Rp{sl:,.0f} ({(entry-sl)/entry*100:.2f}% dari entry)")
+    st.caption(f"• Risk per trade: {risk_percent}% dari modal → Rp{capital * risk_percent / 100:,.0f}")
+    if risk_amount > 0:
+        st.caption(f"• Maksimal kerugian jika kena SL: Rp{risk_amount:,.0f}")
+    if ihsg_trend == "BEARISH":
+        st.error("⚠️ IHSG BEARISH → Risiko lebih tinggi! Sebaiknya hindari entry baru.")
+    elif last['adx'] < 20:
+        st.warning("⚠️ ADX rendah (<20) → Pasar sideways, stop loss rawan tersapu.")
+else:
+    st.info("Tidak ada setup aktif, risiko rendah.")
+
+# === CONFIDENCE SCORE ===
+st.markdown("---")
 st.markdown("### 📊 Confidence Score")
 confidence, factors, grade = calculate_confidence_score(df, ihsg_score)
-
 col_conf1, col_conf2 = st.columns([1, 2])
 with col_conf1:
     st.metric("Total Score", f"{confidence:.0f}", delta=grade)
@@ -245,32 +333,38 @@ with col_conf2:
 
 st.markdown("---")
 
-# HARGA & CHART
-st.markdown("### 💰 Harga")
-col_h1, col_h2, col_h3 = st.columns(3)
-with col_h1:
-    st.metric("High", f"Rp{last['high']:,.0f}")
-with col_h2:
-    st.metric("Low", f"Rp{last['low']:,.0f}")
-with col_h3:
-    if len(df) > 1:
-        change = last['close'] - df.iloc[-2]['close']
-        change_pct = (change / df.iloc[-2]['close']) * 100 if df.iloc[-2]['close'] > 0 else 0
-        st.metric("Current", f"Rp{last['close']:,.0f}", delta=f"{change_pct:+.2f}%")
+# === REKOMENDASI AKHIR (ACTION & KESIMPULAN) ===
+st.markdown("### 🎯 REKOMENDASI AKHIR")
 
-st.markdown("### 📈 Chart")
-st.line_chart(df[['close', 'ema20', 'ema50']], height=300)
+# Warna latar berdasarkan action
+if action == "EKSEKUSI BUY":
+    st.success(f"## ✅ {action}")
+elif action == "TUNGGU KONFIRMASI":
+    st.info(f"## ⏸️ {action}")
+else:
+    st.error(f"## ⛔ {action}")
+
+if recommendation_text:
+    st.markdown(f"**{recommendation_text}**")
+
+# Kesimpulan 1 kalimat
+if skip_reason:
+    st.warning(f"📌 **Kesimpulan:** {skip_reason}. Sebaiknya hindari trading {symbol} hari ini.")
+elif action == "EKSEKUSI BUY":
+    st.success(f"📌 **Kesimpulan:** Semua filter terpenuhi. Anda bisa mempertimbangkan untuk membeli {symbol} di sekitar Rp{entry:,.0f} dengan stop loss Rp{sl:,.0f} dan target Rp{tp:,.0f}.")
+elif action == "TUNGGU KONFIRMASI":
+    st.info(f"📌 **Kesimpulan:** Kondisi masih kurang ideal. Tunggu konfirmasi tambahan sebelum entry.")
+else:
+    st.warning(f"📌 **Kesimpulan:** Tidak ada setup berkualitas. Tetap hold cash.")
 
 st.markdown("---")
 
-# MULTI TIMEFRAME ALIGNMENT
+# === MULTI TIMEFRAME ALIGNMENT ===
 st.markdown("### ⏰ Multi Timeframe Alignment")
-
 with st.spinner("Menganalisis multi timeframe..."):
     mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
 
 col_mtf1, col_mtf2, col_mtf3 = st.columns(3)
-
 for i, (tf_name, tf_data) in enumerate(mtf_results.items()):
     with [col_mtf1, col_mtf2, col_mtf3][i]:
         st.subheader(tf_name.upper())
@@ -288,13 +382,7 @@ else:
 
 st.markdown("---")
 
-# REKOMENDASI
-st.markdown("### 📝 Final Recommendation")
-st.info(get_trading_recommendation(df))
-
-st.markdown("---")
-
-# SCANNER
+# === SCANNER ===
 st.markdown("### 🔍 Scanner Saham")
 if st.button("🚀 SCAN MARKET", width="stretch"):
     with st.spinner("Scanning market..."):
@@ -306,7 +394,7 @@ if st.button("🚀 SCAN MARKET", width="stretch"):
             st.warning("Tidak ada setup berkualitas")
 
 st.markdown("---")
-st.caption("⚠️ DISCLAIMER: Sistem berbasis Smart Money (BOS, FVG, Order Block). Bukan rekomendasi investasi.")
+st.caption("⚠️ DISCLAIMER: Sistem berbasis Smart Money (BOS, FVG, Order Block). Rekomendasi hanya alat bantu, bukan keputusan investasi.")
 
 if auto_refresh:
     time.sleep(30)
