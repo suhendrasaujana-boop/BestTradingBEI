@@ -130,13 +130,26 @@ def add_indicators(df):
     # VWAP
     df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     
+    # Fill NaN awal (backfill dan forward fill)
+    df = df.fillna(method='bfill').fillna(method='ffill')
+    
     return df
 
 def get_ihsg_trend():
     try:
         ihsg = get_data("^JKSE", "1d")
         if ihsg.empty or len(ihsg) < 20:
-            return "NEUTRAL", 50, "Data IHSG tidak cukup"
+            # Fallback: langsung dari yfinance tanpa cache
+            import yfinance as yf
+            ticker = yf.Ticker("^JKSE")
+            df_fallback = ticker.history(period="1mo")
+            if df_fallback.empty:
+                return "NEUTRAL", 50, "IHSG data unavailable"
+            df_fallback = df_fallback.reset_index()
+            df_fallback.columns = [col.lower() for col in df_fallback.columns]
+            ihsg = add_indicators(df_fallback)
+            if ihsg.empty or len(ihsg) < 20:
+                return "NEUTRAL", 50, "IHSG data insufficient"
         
         ihsg = add_indicators(ihsg)
         last = ihsg.iloc[-1]
@@ -154,8 +167,8 @@ def get_ihsg_trend():
         
         daily_change = ((last['close'] - prev['close']) / prev['close']) * 100
         return trend, score, f"IHSG {trend} ({daily_change:+.1f}%)"
-    except:
-        return "NEUTRAL", 50, "IHSG data unavailable"
+    except Exception as e:
+        return "NEUTRAL", 50, "IHSG error"
 
 # ========== FITUR LAMA (BOTTOM, BREAKOUT, REVERSAL) ==========
 def detect_bottom_pattern(df):
@@ -419,10 +432,27 @@ def detect_fair_value_gap(df):
     
     return fvg_bullish, fvg_bearish
 
+def is_fvg_still_valid(df, fvg, current_idx):
+    """FVG masih valid jika harga belum menyentuh area gap (antara lower dan upper)"""
+    if fvg is None:
+        return False
+    # Cek dari candle setelah FVG hingga current_idx
+    for i in range(fvg['index']+1, min(current_idx+1, len(df))):
+        low = df['low'].iloc[i]
+        high = df['high'].iloc[i]
+        if low <= fvg['upper'] and high >= fvg['lower']:
+            return False  # sudah terisi
+    return True
+
 def get_nearest_fvg(df):
-    """Dapatkan FVG terdekat dengan harga saat ini"""
+    """Dapatkan FVG terdekat dengan harga saat ini (hanya yang masih valid)"""
     last_close = df.iloc[-1]['close']
-    fvg_bullish, fvg_bearish = detect_fair_value_gap(df)
+    fvg_bullish_raw, fvg_bearish_raw = detect_fair_value_gap(df)
+    
+    # Filter yang masih valid
+    current_idx = len(df) - 1
+    fvg_bullish = [f for f in fvg_bullish_raw if is_fvg_still_valid(df, f, current_idx)]
+    fvg_bearish = [f for f in fvg_bearish_raw if is_fvg_still_valid(df, f, current_idx)]
     
     nearest_bullish = None
     nearest_bearish = None
@@ -542,8 +572,15 @@ def detect_market_regime(df):
     prev_20 = df.iloc[-21:-1]
     
     adx = last.get('adx', 0)
-    atr_pct = (last['atr'] / last['close']) * 100 if last['close'] > 0 else 0
-    volume_ratio = last['volume_ratio']
+    if pd.isna(adx):
+        adx = 0
+    atr_val = last.get('atr', 0)
+    if pd.isna(atr_val):
+        atr_val = 0
+    atr_pct = (atr_val / last['close']) * 100 if last['close'] > 0 else 0
+    volume_ratio = last.get('volume_ratio', 1)
+    if pd.isna(volume_ratio):
+        volume_ratio = 1
     daily_change = (last['close'] - prev_20['close'].iloc[0]) / prev_20['close'].iloc[0] * 100 if prev_20['close'].iloc[0] > 0 else 0
     
     regime = "NEUTRAL"
@@ -862,6 +899,8 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     
     last = df.iloc[-1]
     atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 100
+    if pd.isna(atr) or atr <= 0:
+        atr = last['close'] * 0.02 if last['close'] > 0 else 100
     
     structure, struct_conf, struct_desc = detect_market_structure(df)
     smart_money, sm_conf, sm_desc = detect_smart_money_volume(df)
@@ -888,7 +927,7 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     
     # PRIORITY 1: BULLISH BOS + FVG + ORDER BLOCK (Smart Money Combo)
     if "BULLISH" in structure and nearest_bullish_fvg and nearest_bullish_ob:
-        entry_price = last['close'] * 1.001
+        entry_price = last['close']   # Dulu *1.001, sekarang market order
         stop_loss = entry_price - (1.5 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "SMART_MONEY_COMBO_BUY"
@@ -897,7 +936,7 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     
     # PRIORITY 2: BULLISH BOS + VOLUME SPIKE
     elif "BULLISH" in structure and volume_spike:
-        entry_price = last['close'] * 1.001
+        entry_price = last['close']
         stop_loss = entry_price - (2 * atr)
         take_profit = entry_price + (3 * atr)
         setup_name = "BREAKOUT_BUY"
