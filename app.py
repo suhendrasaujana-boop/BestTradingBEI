@@ -1,34 +1,49 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from datetime import datetime
 import time
+from datetime import datetime
+from supabase import create_client, Client
+import hashlib
 
-from data import (
-    get_data,
-    add_indicators,
-    get_ihsg_trend,
-    detect_bottom_pattern,
-    detect_valid_breakout,
-    detect_reversal,
-    detect_market_structure,
-    detect_smart_money_volume,
-    detect_liquidity_sweep,
-    detect_candlestick_pattern,
-    detect_market_regime,
-    get_pivot_sr,
-    calculate_entry_sl_tp,
-    calculate_confidence_score,
-    detect_high_quality_setup,
-    get_trading_recommendation,
-    backtest_strategy,
-    scan_saham,
-    get_multi_timeframe_alignment,
-    get_nearest_fvg,
-    get_nearest_order_block
-)
+# ========== INISIALISASI SUPABASE ==========
+try:
+    supabase_url: str = st.secrets["SUPABASE_URL"]
+    supabase_key: str = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(supabase_url, supabase_key)
+except Exception as e:
+    st.error(f"Gagal terhubung ke Supabase. Pastikan secrets sudah diatur.\nError: {e}")
+    st.stop()
 
-# ========== PAGE CONFIG (WAJIB PERTAMA) ==========
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def add_user(username: str, password: str) -> bool:
+    try:
+        existing = supabase.table("users").select("id").eq("username", username).execute()
+        if existing.data:
+            return False
+        hashed = hash_password(password)
+        supabase.table("users").insert({"username": username, "password": hashed}).execute()
+        return True
+    except Exception:
+        return False
+
+def check_user(username: str, password: str) -> bool:
+    try:
+        hashed = hash_password(password)
+        resp = supabase.table("users").select("id").eq("username", username).eq("password", hashed).execute()
+        return len(resp.data) > 0
+    except Exception:
+        return False
+
+def user_exists(username: str) -> bool:
+    try:
+        resp = supabase.table("users").select("id").eq("username", username).execute()
+        return len(resp.data) > 0
+    except Exception:
+        return False
+
+# ========== PAGE CONFIG (HARUS PALING ATAS) ==========
 st.set_page_config(
     page_title="Smart Money Trading System",
     page_icon="🧠",
@@ -36,47 +51,75 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ========== AUTENTIKASI PASSWORD ==========
-def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
+def login_signup_page():
+    st.title("🧠 Smart Money Trading System")
+    st.markdown("Selamat datang! Silakan masuk atau daftar.")
+    tab1, tab2 = st.tabs(["🔐 Masuk", "📝 Daftar Akun Baru"])
+    with tab1:
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Masuk", key="login_btn"):
+            if check_user(username, password):
+                st.session_state.authenticated = True
+                st.session_state.username = username
+                st.rerun()
+            else:
+                st.error("❌ Username atau password salah!")
+    with tab2:
+        new_user = st.text_input("Username", key="reg_user")
+        new_pass = st.text_input("Password", type="password", key="reg_pass")
+        confirm = st.text_input("Konfirmasi Password", type="password", key="reg_confirm")
+        if st.button("Daftar", key="reg_btn"):
+            if not new_user or not new_pass:
+                st.error("Username dan password harus diisi!")
+            elif len(new_user) < 3:
+                st.error("Username minimal 3 karakter!")
+            elif len(new_pass) < 4:
+                st.error("Password minimal 4 karakter!")
+            elif new_pass != confirm:
+                st.error("Password dan konfirmasi tidak sama!")
+            elif user_exists(new_user):
+                st.error("Username sudah terdaftar! Silakan login.")
+            else:
+                if add_user(new_user, new_pass):
+                    st.success("✅ Pendaftaran berhasil! Silakan login.")
+                    st.rerun()
+                else:
+                    st.error("Gagal mendaftar.")
 
-    if st.session_state.authenticated:
-        return True
+if "authenticated" not in st.session_state or not st.session_state.authenticated:
+    login_signup_page()
+    st.stop()
 
-    st.title("🔐 Smart Money Trading System")
-    st.markdown("Silakan masukkan password untuk mengakses aplikasi.")
-    
-    # Ambil password dari Streamlit secrets (harus sudah diatur di dashboard)
-    correct_password = st.secrets["password"]
-    
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if password == correct_password:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("❌ Password salah!")
-    return False
+# ========== IMPORT FUNGSI ANALISIS (SETELAH LOGIN) ==========
+from data import (
+    get_data, add_indicators, get_ihsg_trend,
+    detect_bottom_pattern, detect_valid_breakout, detect_reversal,
+    detect_market_structure, detect_smart_money_volume, detect_liquidity_sweep,
+    detect_candlestick_pattern, detect_market_regime, get_pivot_sr,
+    calculate_entry_sl_tp, calculate_confidence_score, detect_high_quality_setup,
+    get_trading_recommendation, backtest_strategy, scan_saham,
+    get_multi_timeframe_alignment, get_nearest_fvg, get_nearest_order_block
+)
 
-# Jalankan autentikasi
-if not check_password():
-    st.stop()  # Hentikan jika belum login
+def logout():
+    if st.sidebar.button("🚪 Logout"):
+        for key in ['authenticated', 'username']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
 # ========== SIDEBAR ==========
 with st.sidebar:
     st.title("🧠 Smart Money Trading")
-    st.caption("Market Structure | FVG | Order Block | Liquidity Sweep")
+    st.caption(f"👤 {st.session_state.username} | Market Structure | FVG | Order Block")
     st.markdown("---")
-    
     symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "IHSG").upper()
     timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
-    
     st.markdown("---")
     st.subheader("💰 Risk Management")
     capital = st.number_input("Modal (Rp)", min_value=1000000, value=100000000, step=1000000)
     risk_percent = st.slider("Risk per Trade (%)", min_value=0.5, max_value=3.0, value=2.0, step=0.5)
-    
     st.markdown("---")
     st.subheader("📋 Status Posisi (Opsional)")
     has_position = st.checkbox("Saya sudah punya posisi di saham ini")
@@ -85,28 +128,18 @@ with st.sidebar:
     if has_position:
         entry_price_manual = st.number_input("Harga Entry (Rp)", min_value=0, value=0, step=100)
         shares_manual = st.number_input("Jumlah Saham", min_value=0, value=0, step=100)
-    
     st.markdown("---")
-    st.info("""
-    **Fitur Smart Money:**
-    - Swing Structure (BOS/CHOCH)
-    - Fair Value Gap (FVG)
-    - Order Block
-    - Liquidity Sweep
-    - Multi Timeframe Alignment
-    - Rekomendasi Aksi & Filter Prioritas
-    """)
+    st.info("**Fitur Smart Money:** Swing Structure, FVG, Order Block, Liquidity Sweep, Multi Timeframe")
     st.markdown("---")
     auto_refresh = st.checkbox("Auto Refresh (30 detik)", value=False)
     if auto_refresh:
-        st.warning("⚠️ Auto refresh aktif - dapat memperlambat sistem karena rate limit Yahoo Finance. Sebaiknya gunakan manual refresh.")
+        st.warning("⚠️ Auto refresh aktif - dapat memperlambat sistem karena rate limit Yahoo Finance.")
     st.caption(f"Update: {datetime.now().strftime('%H:%M:%S')}")
+    logout()
 
 # ========== MAIN CONTENT ==========
 st.title(f"🧠 {symbol} - Smart Money Analysis")
-
 df = get_data(symbol, timeframe)
-
 if df.empty:
     st.warning(f"Data {symbol} kosong. Coba: BBCA, BBRI, BMRI, ASII, atau IHSG.")
     st.stop()
@@ -117,48 +150,37 @@ current_price = last['close']
 
 # === MARKET FILTER IHSG ===
 ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
-
-# === AMBIL DATA DARI INDIKATOR ===
 entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
 support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
 atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 0
 if pd.isna(atr): atr = last['close'] * 0.02
+adx_val = last.get('adx', 0)
+if pd.isna(adx_val): adx_val = 0
 
 # === PRIORITY FILTER ===
 skip_reason = None
 action = "SKIP"
-action_color = "red"
 recommendation_text = ""
-
 if ihsg_trend == "BEARISH":
-    skip_reason = f"IHSG BEARISH ({ihsg_msg.split('(')[-1].replace(')','')}) → Market tidak mendukung"
-adx_val = last.get('adx', 0)
-if pd.isna(adx_val): adx_val = 0
-if adx_val < 20:
-    skip_reason = f"ADX {adx_val:.1f} (<20) → Pasar sideways, sinyal palsu tinggi"
+    skip_reason = f"IHSG BEARISH → Market tidak mendukung"
+elif adx_val < 20:
+    skip_reason = f"ADX {adx_val:.1f} (<20) → Pasar sideways"
 elif entry and conf >= 70 and rr >= 1.5:
     action = "EKSEKUSI BUY"
-    action_color = "green"
     recommendation_text = f"✅ Setup: {setup} | Confidence {conf:.0f} | RR 1:{rr:.1f}"
 elif entry and conf >= 60:
     action = "TUNGGU KONFIRMASI"
-    action_color = "orange"
-    recommendation_text = f"⏸️ Setup: {setup} | Confidence {conf:.0f} | Perlu konfirmasi tambahan"
+    recommendation_text = f"⏸️ Setup: {setup} | Confidence {conf:.0f} | Perlu konfirmasi"
 elif entry:
     action = "SKIP (KUALITAS RENDAH)"
-    action_color = "red"
     recommendation_text = f"❌ Setup {setup} tidak memenuhi kriteria"
 else:
     action = "SKIP (TIDAK ADA SETUP)"
-    action_color = "red"
     recommendation_text = "Tidak ada setup berkualitas"
-
 if skip_reason:
     action = "SKIP"
-    action_color = "red"
     recommendation_text = skip_reason
 
-# === TAMPILAN MARKET FILTER ===
 st.markdown("### 📊 Market Filter")
 if ihsg_trend == "BULLISH":
     st.success(f"✅ {ihsg_msg}")
@@ -166,14 +188,12 @@ elif ihsg_trend == "BEARISH":
     st.error(f"⚠️ {ihsg_msg}")
 else:
     st.warning(f"📊 {ihsg_msg}")
-
 st.markdown("---")
 
-# === SMART MONEY DETECTION (5 KOLOM) ===
+# === SMART MONEY DETECTION 5 KOLOM ===
 st.markdown("### 🔍 Smart Money Detection")
 col1, col2, col3, col4, col5 = st.columns(5)
-
-structure, struct_conf, struct_desc = detect_market_structure(df)
+structure, struct_conf, _ = detect_market_structure(df)
 with col1:
     if "BULLISH" in structure:
         st.success(f"**Structure**\n{structure}")
@@ -182,8 +202,7 @@ with col1:
     else:
         st.info(f"**Structure**\n{structure}")
     st.caption(f"Conf: {struct_conf:.0f}%")
-
-sm, sm_conf, sm_desc = detect_smart_money_volume(df)
+sm, sm_conf, _ = detect_smart_money_volume(df)
 with col2:
     if sm == "ACCUMULATION":
         st.success(f"**Smart Money**\n{sm}")
@@ -192,8 +211,7 @@ with col2:
     else:
         st.info(f"**Smart Money**\n{sm}")
     st.caption(f"Conf: {sm_conf:.0f}%")
-
-is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
+is_sweep, sweep_conf, sweep_type, _ = detect_liquidity_sweep(df)
 with col3:
     if sweep_type == "BULLISH_SFP":
         st.success(f"**Liquidity**\n{sweep_type}")
@@ -202,7 +220,6 @@ with col3:
     else:
         st.info(f"**Liquidity**\nTidak ada")
     st.caption(f"Conf: {sweep_conf:.0f}%")
-
 nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
 with col4:
     if nearest_bullish_fvg:
@@ -214,7 +231,6 @@ with col4:
     else:
         st.info(f"**FVG**\nNo gap")
         st.caption("-")
-
 nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
 with col5:
     if nearest_bullish_ob:
@@ -226,7 +242,6 @@ with col5:
     else:
         st.info(f"**Order Block**\nNo OB")
         st.caption("-")
-
 st.markdown("---")
 
 # === MARKET REGIME ===
@@ -241,10 +256,9 @@ with col_r3:
     atr_pct = (atr / current_price * 100) if current_price > 0 else 0
     st.metric("ATR %", f"{atr_pct:.2f}%")
 st.caption(regime_desc)
-
 st.markdown("---")
 
-# === PIVOT SUPPORT RESISTANCE ===
+# === PIVOT SR ===
 st.markdown("### 📊 Pivot Support & Resistance")
 col_sr1, col_sr2, col_sr3, col_sr4 = st.columns(4)
 with col_sr1:
@@ -255,17 +269,15 @@ with col_sr3:
     st.metric("Pivot", f"Rp{pivot:,.0f}")
 with col_sr4:
     st.metric("Fib 61.8%", f"Rp{fib_618:,.0f}")
-
 st.markdown("---")
 
 # === ENTRY, SL, TP ===
-st.markdown("### 🎯 Entry - Stop Loss - Take Profit (Dari Indikator)")
+st.markdown("### 🎯 Entry - Stop Loss - Take Profit")
 if entry:
     if "BUY" in setup:
         st.success(f"### 🔥 {setup}")
     else:
         st.info(f"### 📊 {setup}")
-    
     col_e1, col_e2, col_e3 = st.columns(3)
     with col_e1:
         st.metric("🎯 ENTRY", f"Rp{entry:,.0f}")
@@ -273,7 +285,6 @@ if entry:
         st.metric("✂️ STOP LOSS", f"Rp{sl:,.0f}")
     with col_e3:
         st.metric("🏁 TAKE PROFIT", f"Rp{tp:,.0f}")
-    
     col_ps1, col_ps2, col_ps3 = st.columns(3)
     with col_ps1:
         st.metric("Position Size", f"{shares:,} saham")
@@ -281,12 +292,10 @@ if entry:
         st.metric("Risk/Reward", f"1:{rr:.1f}")
     with col_ps3:
         st.metric("Confidence", f"{conf:.0f}/100")
-    
     if signals:
         st.caption(" | ".join(signals[:3]))
 else:
     st.warning("⛔ Tidak ada setup trading berkualitas saat ini")
-
 st.markdown("---")
 
 # === TARGET ALTERNATIF ===
@@ -294,14 +303,13 @@ if entry and atr > 0:
     st.markdown("### 🎯 Target Harga Alternatif")
     target1 = entry + (1.5 * atr)
     target2 = entry + (2 * atr)
-    target3 = entry + (3 * atr)
     col_t1, col_t2, col_t3 = st.columns(3)
     with col_t1:
         st.metric("Target 1 (Konservatif)", f"Rp{target1:,.0f}", delta="RR 1:1.5")
     with col_t2:
         st.metric("Target 2 (Moderat)", f"Rp{target2:,.0f}", delta="RR 1:2")
     with col_t3:
-        st.metric("Target 3 (Agresif)", f"Rp{target3:,.0f}", delta="RR 1:3")
+        st.metric("Target 3 (Agresif)", f"Rp{tp:,.0f}", delta="RR 1:3")
 
 # === STATUS POSISI ===
 if has_position and entry_price_manual > 0 and shares_manual > 0:
@@ -319,7 +327,6 @@ if has_position and entry_price_manual > 0 and shares_manual > 0:
             st.metric("Profit/Loss", f"+{pnl_percent:.2f}%", delta=f"+Rp{pnl_nominal:,.0f}")
         else:
             st.metric("Profit/Loss", f"{pnl_percent:.2f}%", delta=f"-Rp{abs(pnl_nominal):,.0f}")
-    
     if pnl_percent > 5:
         st.success("✅ Posisi sudah aman, pertimbangkan trailing stop")
     elif pnl_percent > 0:
@@ -358,7 +365,6 @@ with col_conf2:
             st.caption(f"✅ {name}: +{score:.0f} ({desc})")
         else:
             st.caption(f"❌ {name}: {score:.0f} ({desc})")
-
 st.markdown("---")
 
 # === REKOMENDASI AKHIR ===
@@ -369,10 +375,8 @@ elif action == "TUNGGU KONFIRMASI":
     st.info(f"## ⏸️ {action}")
 else:
     st.error(f"## ⛔ {action}")
-
 if recommendation_text:
     st.markdown(f"**{recommendation_text}**")
-
 if skip_reason:
     st.warning(f"📌 **Kesimpulan:** {skip_reason}. Sebaiknya hindari trading {symbol} hari ini.")
 elif action == "EKSEKUSI BUY":
@@ -381,14 +385,12 @@ elif action == "TUNGGU KONFIRMASI":
     st.info(f"📌 **Kesimpulan:** Kondisi masih kurang ideal. Tunggu konfirmasi tambahan sebelum entry.")
 else:
     st.warning(f"📌 **Kesimpulan:** Tidak ada setup berkualitas. Tetap hold cash.")
-
 st.markdown("---")
 
 # === MULTI TIMEFRAME ALIGNMENT ===
 st.markdown("### ⏰ Multi Timeframe Alignment")
 with st.spinner("Menganalisis multi timeframe..."):
     mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
-
 col_mtf1, col_mtf2, col_mtf3 = st.columns(3)
 tf_keys = list(mtf_results.keys())
 for i, tf_name in enumerate(tf_keys[:3]):
@@ -399,14 +401,12 @@ for i, tf_name in enumerate(tf_keys[:3]):
         if tf_data['entry']:
             st.caption(f"Entry: Rp{tf_data['entry']:,.0f}")
             st.caption(f"SL: Rp{tf_data['stop_loss']:,.0f}")
-
 if alignment_score >= 80:
     st.success(f"### ✅ {alignment} - Semua timeframe searah! (Score: {alignment_score})")
 elif alignment_score >= 60:
     st.info(f"### 📊 {alignment} - Sebagian searah (Score: {alignment_score})")
 else:
     st.warning(f"### ⚠️ {alignment} - Timeframe kontradiksi (Score: {alignment_score})")
-
 st.markdown("---")
 
 # === SCANNER ===
@@ -422,7 +422,6 @@ if st.button("🚀 SCAN MARKET", use_container_width=True):
 
 st.markdown("---")
 st.caption("⚠️ DISCLAIMER: Sistem berbasis Smart Money (BOS, FVG, Order Block). Rekomendasi hanya alat bantu, bukan keputusan investasi.")
-
 if auto_refresh:
     time.sleep(30)
     st.rerun()
