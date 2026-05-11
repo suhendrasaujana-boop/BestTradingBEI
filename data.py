@@ -19,6 +19,10 @@ def _wait_for_rate_limit():
 def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
+    
+    if symbol == "^JKSE" or symbol == "JKSE":
+        symbol = "^JKSE"
+    
     cache_key = f"{symbol}_{timeframe}"
     
     if cache_key in _data_cache:
@@ -27,19 +31,21 @@ def get_data(symbol, timeframe="1d"):
             return cached_data
     
     try:
-        interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d", "4h": "1h"}
+        interval_map = {
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "60m": "60m",
+            "1d": "1d"
+        }
         
         if timeframe in ["5m", "15m", "30m", "60m"]:
-            period = "5d"
+            period = "7d"
         else:
-            period = "2mo"
+            period = "3mo"
         
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
-        
-        if df.empty and not symbol.endswith('.JK'):
-            ticker = yf.Ticker(f"{symbol}.JK")
-            df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         
         if df.empty:
             return pd.DataFrame()
@@ -60,7 +66,6 @@ def add_indicators(df):
     df = df.copy()
     
     # EMA
-    df['ema10'] = df['close'].ewm(span=10, adjust=False).mean()
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
@@ -100,20 +105,12 @@ def add_indicators(df):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df['adx'] = dx.rolling(window=14).mean()
     
-    # Bollinger Bands
-    df['bb_middle'] = df['close'].rolling(window=20).mean()
-    bb_std = df['close'].rolling(window=20).std()
-    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
     # Support & Resistance
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
     return df
 
-# ========== IHSG FILTER ==========
 def get_ihsg_trend():
     try:
         ihsg = get_data("^JKSE", "1d")
@@ -124,26 +121,21 @@ def get_ihsg_trend():
         last = ihsg.iloc[-1]
         prev = ihsg.iloc[-2]
         
-        ema20 = last.get('ema20', 0)
-        ema50 = last.get('ema50', 0)
-        close = last.get('close', 0)
-        
-        if close > ema20 > ema50:
+        if last['close'] > last['ema20'] > last['ema50']:
             trend = "BULLISH"
             score = 70
-        elif close < ema20 < ema50:
+        elif last['close'] < last['ema20'] < last['ema50']:
             trend = "BEARISH"
             score = 30
         else:
             trend = "SIDEWAYS"
             score = 50
         
-        daily_change = ((close - prev['close']) / prev['close']) * 100
+        daily_change = ((last['close'] - prev['close']) / prev['close']) * 100
         return trend, score, f"IHSG {trend} ({daily_change:+.1f}%)"
     except:
         return "NEUTRAL", 50, "IHSG data unavailable"
 
-# ========== BOTTOM DETECTION ==========
 def detect_bottom_pattern(df):
     if df.empty or len(df) < 30:
         return False, 0, "Data tidak cukup"
@@ -170,15 +162,8 @@ def detect_bottom_pattern(df):
         confidence += 30
     
     if last['rsi'] < 30 and last['volume_ratio'] > 1.5:
-        signals.append(f"Oversold + Volume")
+        signals.append("Oversold + Volume")
         confidence += 25
-    
-    body = abs(last['close'] - last['open'])
-    lower_wick = min(last['open'], last['close']) - last['low']
-    is_hammer = (lower_wick > body * 2) and (len(str(body)) > 0)
-    if is_hammer:
-        signals.append("Hammer Candle")
-        confidence += 20
     
     support = prev_20['low'].min()
     if abs(last['close'] - support) / support < 0.01 and last['close'] > support:
@@ -189,7 +174,6 @@ def detect_bottom_pattern(df):
     desc = " | ".join(signals) if signals else "Tidak ada sinyal"
     return is_bottom, min(100, confidence), desc
 
-# ========== BREAKOUT DETECTION ==========
 def detect_valid_breakout(df, lookback=20):
     if df.empty or len(df) < lookback + 5:
         return False, "NONE", 0, "Data tidak cukup"
@@ -203,16 +187,16 @@ def detect_valid_breakout(df, lookback=20):
     confidence = 0
     
     if last['close'] > resistance:
-        signals.append(f"Break resistance")
+        signals.append("Break resistance")
         confidence += 30
     else:
         return False, "NONE", 0, "No breakout"
     
     if last['volume_ratio'] >= 2.0:
-        signals.append(f"High volume")
+        signals.append("High volume")
         confidence += 30
     elif last['volume_ratio'] >= 1.5:
-        signals.append(f"Good volume")
+        signals.append("Good volume")
         confidence += 20
     else:
         return False, "FAKE_BREAKOUT", 10, "Volume rendah - fake breakout!"
@@ -221,11 +205,8 @@ def detect_valid_breakout(df, lookback=20):
         signals.append("MACD bullish")
         confidence += 15
     
-    if last['rsi'] < 75:
-        confidence += 10
-    
     if last['adx'] >= 25:
-        signals.append(f"Strong trend")
+        signals.append("Strong trend")
         confidence += 15
     
     if confidence >= 70:
@@ -238,7 +219,6 @@ def detect_valid_breakout(df, lookback=20):
     desc = " | ".join(signals)
     return confidence >= 50, breakout_type, min(100, confidence), desc
 
-# ========== REVERSAL DETECTION ==========
 def detect_reversal(df):
     if df.empty or len(df) < 30:
         return "NONE", 0, "Data tidak cukup"
@@ -283,7 +263,6 @@ def detect_reversal(df):
         return reversal_type, min(100, confidence), desc
     return "NONE", confidence, desc
 
-# ========== HIGH QUALITY SETUP ==========
 def detect_high_quality_setup(df):
     if df.empty or len(df) < 50:
         return "NO_SETUP", 0, "Data tidak cukup"
@@ -295,7 +274,6 @@ def detect_high_quality_setup(df):
     last = df.iloc[-1]
     trend_up = last['ema20'] > last['ema50']
     trend_down = last['ema20'] < last['ema50']
-    ema_aligned = last['close'] > last['ema20'] > last['ema50'] if trend_up else last['close'] < last['ema20'] < last['ema50']
     momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
     momentum_bearish = last['macd_histogram'] < 0 and last['rsi'] < 50
     volume_spike = last['volume_ratio'] >= 1.5
@@ -309,20 +287,17 @@ def detect_high_quality_setup(df):
         return "STRONG_BREAKOUT_BUY", 90, breakout_desc
     if is_breakout and breakout_type == "VALID_BREAKOUT":
         return "BREAKOUT_BUY", 75, breakout_desc
-    if is_bottom and reversal_type == "BULLISH" and bottom_conf >= 50:
-        return "BOTTOM_REVERSAL_BUY", 85, "Bottom + Reversal detected"
-    if reversal_type == "BULLISH" and reversal_conf >= 60:
+    if is_bottom and reversal_type == "BULLISH":
+        return "BOTTOM_REVERSAL_BUY", 85, "Bottom + Reversal"
+    if reversal_type == "BULLISH":
         return "REVERSAL_BUY", 80, "Bullish reversal"
-    if trend_up and ema_aligned and strong_trend and momentum_bullish and volume_spike:
+    if trend_up and strong_trend and momentum_bullish and volume_spike:
         return "TREND_BUY", 70, "Strong uptrend"
-    if trend_down and ema_aligned and strong_trend and momentum_bearish:
+    if trend_down and strong_trend and momentum_bearish:
         return "TREND_SELL", 70, "Strong downtrend"
-    if reversal_type == "BEARISH" and reversal_conf >= 60:
-        return "REVERSAL_SELL", 75, "Bearish reversal"
     
     return "NO_SETUP", 0, "Tidak ada setup berkualitas"
 
-# ========== RISK REWARD ==========
 def calculate_risk_reward(entry_price, stop_loss, take_profit):
     risk = abs(entry_price - stop_loss)
     reward = abs(take_profit - entry_price)
@@ -335,15 +310,11 @@ def calculate_risk_reward(entry_price, stop_loss, take_profit):
     elif rr >= 1.5:
         grade = "GOOD"
         rec = "Bisa eksekusi"
-    elif rr >= 1:
-        grade = "FAIR"
-        rec = "Hanya jika setup bagus"
     else:
         grade = "POOR"
         rec = "SKIP! Risk > Reward"
     return {"ratio": round(rr, 2), "grade": grade, "recommendation": rec}
 
-# ========== POSITION SIZING ==========
 def calculate_smart_position_size(capital, entry_price, stop_loss, risk_percent=2):
     if entry_price <= stop_loss:
         return 0, 0
@@ -355,7 +326,6 @@ def calculate_smart_position_size(capital, entry_price, stop_loss, risk_percent=
     actual_risk = (shares * risk_per_share / capital) * 100 if capital > 0 else 0
     return shares, actual_risk
 
-# ========== CONFIDENCE SCORE ==========
 def calculate_confidence_score(df, ihsg_score=50):
     if df.empty or len(df) < 30:
         return 50, [], "NORMAL"
@@ -373,20 +343,20 @@ def calculate_confidence_score(df, ihsg_score=50):
     
     if last['adx'] >= 25:
         total += 15
-        factors.append(("ADX", 15, f"Strong"))
+        factors.append(("ADX", 15, "Strong"))
     elif last['adx'] >= 20:
         total += 5
-        factors.append(("ADX", 5, f"Weak"))
+        factors.append(("ADX", 5, "Weak"))
     else:
         total -= 10
-        factors.append(("ADX", -10, f"Sideways"))
+        factors.append(("ADX", -10, "Sideways"))
     
     if last['volume_ratio'] >= 1.5:
         total += 15
-        factors.append(("Volume", 15, f"Spike"))
+        factors.append(("Volume", 15, "Spike"))
     elif last['volume_ratio'] < 0.6:
         total -= 10
-        factors.append(("Volume", -10, f"Sepi"))
+        factors.append(("Volume", -10, "Sepi"))
     
     macd_bullish = last['macd_histogram'] > 0
     rsi_bullish = last['rsi'] > 50
@@ -411,24 +381,39 @@ def calculate_confidence_score(df, ihsg_score=50):
     
     return final, factors, grade
 
-# ========== MULTI TIMEFRAME ==========
+# ========== MULTI TIMEFRAME DENGAN 5 TIMEFRAME ==========
 def multi_timeframe_analysis(symbol):
-    timeframes = ["1h", "1d"]
+    """Analisis 5 timeframe untuk konfirmasi sinyal"""
+    timeframes = ["5m", "15m", "30m", "60m", "1d"]
     scores = {}
+    
     for tf in timeframes:
-        df = get_data(symbol, tf)
-        if not df.empty and len(df) > 20:
-            df = add_indicators(df)
-            score, _, _ = calculate_confidence_score(df)
-            scores[tf] = score
-        else:
+        try:
+            df = get_data(symbol, tf)
+            if not df.empty and len(df) > 20:
+                df = add_indicators(df)
+                score, _, _ = calculate_confidence_score(df)
+                scores[tf] = score
+            else:
+                scores[tf] = 50
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error {tf}: {e}")
             scores[tf] = 50
-        time.sleep(0.5)
-    weights = {"1h": 0.3, "1d": 0.7}
-    weighted = sum(scores[tf] * weights.get(tf, 0.5) for tf in timeframes)
+    
+    # Bobot: semakin besar timeframe semakin besar bobotnya
+    weights = {
+        "5m": 0.05,
+        "15m": 0.10,
+        "30m": 0.15,
+        "60m": 0.25,
+        "1d": 0.45
+    }
+    
+    weighted = sum(scores.get(tf, 50) * weights.get(tf, 0.2) for tf in timeframes)
+    
     return {**scores, "weighted": weighted}
 
-# ========== SCANNER ==========
 def scan_saham():
     stocks = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "TLKM.JK", "ASII.JK"]
     results = []
