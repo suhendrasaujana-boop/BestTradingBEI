@@ -22,7 +22,7 @@ def _wait_for_rate_limit():
     _last_request_time = time.time()
 
 # ========== DATA FETCHING ==========
-ddef get_data(symbol, timeframe="1d"):
+def get_data(symbol, timeframe="1d"):
     """
     Ambil data dari database lokal dulu.
     Kalau tidak ada atau butuh update, fetch dari Yahoo Finance lalu simpan ke database.
