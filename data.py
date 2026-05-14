@@ -11,7 +11,7 @@ warnings.filterwarnings('ignore')
 # ========== CACHE & RATE LIMIT ==========
 _data_cache = {}
 _last_request_time = 0
-_MIN_REQUEST_INTERVAL = 1
+_MIN_REQUEST_INTERVAL = 3  # Naikkan dari 1 menjadi 3 detik
 
 def _wait_for_rate_limit():
     global _last_request_time
