@@ -115,10 +115,11 @@ def get_last_date(symbol):
 
 def update_daily_data(symbols=None):
     """
-    Update data harian untuk daftar saham.
+    Update data harian dengan jeda aman (2 detik per saham).
     Hanya mengunduh data yang belum ada di database.
     """
     from data import get_data as fetch_from_yahoo
+    import time as time_module
     
     if symbols is None:
         symbols = [
@@ -136,22 +137,33 @@ def update_daily_data(symbols=None):
     
     today = datetime.now().strftime('%Y-%m-%d')
     updated = 0
+    skipped = 0
     
-    for sym in symbols:
+    for i, sym in enumerate(symbols):
         try:
             last_date = get_last_date(sym)
             if last_date and last_date >= today:
+                skipped += 1
                 continue  # Sudah punya data hari ini
             
-            print(f"Mengunduh {sym}...")
+            print(f"[{i+1}/{len(symbols)}] Mengunduh {sym}...")
             df = fetch_from_yahoo(sym, "1d")
             if not df.empty:
                 store_data(sym, df)
                 updated += 1
+            
+            # Jeda 2 detik antar request (40 saham = 80 detik)
+            if i < len(symbols) - 1:
+                time_module.sleep(2)
+                
         except Exception as e:
-            print(f"Gagal update {sym}: {e}")
+            print(f"⚠️ Gagal update {sym}: {e}")
+            # Jika kena rate limit, tunggu lebih lama
+            if "rate" in str(e).lower() or "limit" in str(e).lower():
+                print("⏳ Rate limit terdeteksi, menunggu 60 detik...")
+                time_module.sleep(60)
     
-    print(f"✅ {updated} saham diperbarui.")
+    print(f"✅ {updated} saham diperbarui, {skipped} saham sudah ada di database.")
     return updated
 
 # Inisialisasi database saat file di-import
