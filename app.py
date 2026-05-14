@@ -1,370 +1,824 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import os
-from datetime import datetime
-
-# ===================== WAJIB PALING ATAS =====================
-st.set_page_config(
-    page_title="Smart Money Trading Engine",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ===================== PASSWORD & SECURITY =====================
-def check_password():
-    correct_password = os.getenv("APP_PASSWORD", st.secrets.get("APP_PASSWORD", None))
-    if not correct_password:
-        correct_password = "dev123"
-        st.sidebar.warning("⚠️  Gunakan environment variable APP_PASSWORD atau Streamlit secrets!")
-
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if not st.session_state.authenticated:
-        with st.form("login_form"):
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login")
-            if submitted:
-                if password == correct_password:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Password salah")
-            st.stop()
-
-check_password()
-
-# ===================== IMPORTS DATA =====================
-from data import (
-    get_data,
-    add_indicators,
-    get_ihsg_trend,
-    detect_market_structure,
-    detect_market_regime,
-    detect_liquidity_sweep,
-    detect_candlestick_pattern,
-    detect_smart_money_volume,
-    get_pivot_sr,
-    get_nearest_fvg,
-    get_nearest_order_block,
-    detect_bos_choch,
-    calculate_confidence_score,
-    calculate_entry_sl_tp,
-    get_trading_recommendation,
-    detect_high_quality_setup,
-    get_multi_timeframe_alignment,
-    scan_saham,
-    backtest_strategy
-)
-
-# ===================== SIDEBAR =====================
-with st.sidebar:
-    st.title("⚙️ Konfigurasi")
-    symbol_input = st.text_input("Kode Saham", value="BBCA").upper()
-    timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"], index=0)
-    modal = st.number_input("Modal (Rp)", value=100_000_000, step=10_000_000, format="%d")
-    risk_pct = st.slider("Risiko per trade (%)", 0.5, 5.0, 2.0, 0.5)
-    st.divider()
-    st.caption("Smart Money Trading Engine v3.0")
-    st.caption("Data dari Yahoo Finance (delay 15m)")
-
-# ===================== MAIN TABS =====================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📊 Overview", "🧠 Smart Money", "⚖️ Risk & Entry", "🔍 Scanner", "📈 Backtest"]
-)
-
-# ===================== FUNGSI CHART =====================
-@st.cache_data(ttl=120, show_spinner=False)
-def load_data(symbol, tf):
-    try:
-        df = get_data(symbol, tf)
-        if df.empty:
-            return None, "Data tidak tersedia"
-        df = add_indicators(df)
-        return df, None
-    except Exception as e:
-        return None, str(e)
-
-def plot_smart_money_chart(df):
-    if df.empty or len(df) < 30:
-        return None
-    df_plot = df.iloc[-100:].copy()
-    fig = go.Figure()
-
-    fig.add_trace(go.Candlestick(
-        x=df_plot.index if 'datetime' not in df_plot.columns else df_plot['datetime'],
-        open=df_plot['open'],
-        high=df_plot['high'],
-        low=df_plot['low'],
-        close=df_plot['close'],
-        name="OHLC",
-        increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
-    ))
-
-    nearest_bull, nearest_bear = get_nearest_fvg(df)
-    if nearest_bull:
-        fig.add_hrect(y0=nearest_bull['lower'], y1=nearest_bull['upper'],
-                      fillcolor="rgba(0,255,0,0.2)", line_width=0,
-                      annotation_text="Bullish FVG", annotation_position="top left")
-    if nearest_bear:
-        fig.add_hrect(y0=nearest_bear['lower'], y1=nearest_bear['upper'],
-                      fillcolor="rgba(255,0,0,0.2)", line_width=0,
-                      annotation_text="Bearish FVG", annotation_position="top left")
-
-    nearest_ob_bull, nearest_ob_bear = get_nearest_order_block(df)
-    if nearest_ob_bull:
-        fig.add_hrect(y0=nearest_ob_bull['low'], y1=nearest_ob_bull['high'],
-                      fillcolor="rgba(0,200,200,0.2)", line_width=1, line_dash="dash",
-                      annotation_text="Bullish OB", annotation_position="bottom left")
-    if nearest_ob_bear:
-        fig.add_hrect(y0=nearest_ob_bear['low'], y1=nearest_ob_bear['high'],
-                      fillcolor="rgba(200,0,200,0.2)", line_width=1, line_dash="dash",
-                      annotation_text="Bearish OB", annotation_position="bottom left")
-
-    from data import detect_swing_points
-    swing_highs, swing_lows = detect_swing_points(df, lookback=5, confirmation=1)
-    if swing_highs:
-        h_idx = [x[0] for x in swing_highs if x[0] in df_plot.index]
-        h_val = [x[1] for x in swing_highs if x[0] in df_plot.index]
-        fig.add_trace(go.Scatter(x=h_idx, y=h_val, mode='markers',
-                                 marker=dict(symbol='triangle-down', size=8, color='red'),
-                                 name='Swing High'))
-    if swing_lows:
-        l_idx = [x[0] for x in swing_lows if x[0] in df_plot.index]
-        l_val = [x[1] for x in swing_lows if x[0] in df_plot.index]
-        fig.add_trace(go.Scatter(x=l_idx, y=l_val, mode='markers',
-                                 marker=dict(symbol='triangle-up', size=8, color='green'),
-                                 name='Swing Low'))
-
-    fig.update_layout(
-        height=500,
-        margin=dict(l=0, r=0, t=20, b=0),
-        template="plotly_dark",
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    return fig
-
-# ===================== TAB 1: OVERVIEW =====================
-with tab1:
-    st.header("📊 Market Overview")
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
-        st.metric("IHSG", ihsg_trend, delta=ihsg_msg)
-    with col2:
-        st.write("**Saham Dipilih:**", symbol_input)
-        st.write("**Timeframe:**", timeframe)
-
-    df, error = load_data(symbol_input, timeframe)
-    if error:
-        st.error(f"❌ Gagal memuat data: {error}")
-        st.stop()
-    if df is None or len(df) < 30:
-        st.warning("Data tidak cukup untuk analisis (minimal 30 candle).")
-        st.stop()
-
-    last = df.iloc[-1]
-    colA, colB, colC, colD = st.columns(4)
-    colA.metric("Close", f"Rp{last['close']:,.0f}")
-    colB.metric("RSI", f"{last['rsi']:.1f}")
-    colC.metric("ADX", f"{last['adx']:.1f}" if pd.notna(last['adx']) else "N/A")
-    colD.metric("Volume Ratio", f"{last['volume_ratio']:.2f}x")
-
-    regime, reg_conf, reg_desc = detect_market_regime(df)
-    st.info(f"**Market Regime:** {regime} (confidence: {reg_conf}) – {reg_desc}")
-
-# ===================== TAB 2: SMART MONEY =====================
-with tab2:
-    st.header("🧠 Smart Money Analysis")
-    if df is None:
-        st.warning("Data belum dimuat. Silakan kembali ke tab Overview.")
-    else:
-        st.subheader("Price Action & Smart Money Zones")
-        fig = plot_smart_money_chart(df)
-        if fig:
-            st.plotly_chart(fig, width='stretch')
-        else:
-            st.info("Chart tidak dapat ditampilkan karena data kurang.")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            structure, struct_conf, struct_desc = detect_market_structure(df)
-            bos_cho, bos_conf, bos_desc = detect_bos_choch(df)
-            st.metric("Market Structure", structure, delta=f"Conf: {struct_conf}")
-            st.caption(f"BOS/CHOCH: {bos_cho} ({bos_desc})")
-
-            nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
-            if nearest_bull_fvg:
-                st.success(f"✅ Bullish FVG terdekat di {nearest_bull_fvg['upper']:.2f} - {nearest_bull_fvg['lower']:.2f}")
-            elif nearest_bear_fvg:
-                st.error(f"❌ Bearish FVG terdekat di {nearest_bear_fvg['upper']:.2f} - {nearest_bear_fvg['lower']:.2f}")
-            else:
-                st.info("Tidak ada FVG valid")
-
-        with col2:
-            regime, reg_conf, reg_desc = detect_market_regime(df)
-            st.metric("Market Regime", regime, delta=f"Conf: {reg_conf}")
-
-            nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
-            if nearest_bull_ob:
-                st.success(f"✅ Bullish OB di {nearest_bull_ob['high']:.2f} - {nearest_bull_ob['low']:.2f}")
-            elif nearest_bear_ob:
-                st.error(f"❌ Bearish OB di {nearest_bear_ob['high']:.2f} - {nearest_bear_ob['low']:.2f}")
-            else:
-                st.info("Tidak ada Order Block")
-
-        is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
-        if is_sweep:
-            st.warning(f"⚡ Liquidity Sweep terdeteksi: {sweep_type} ({sweep_desc})")
-
-# ===================== TAB 3: RISK & ENTRY =====================
-with tab3:
-    st.header("⚖️ Risk Management & Setup")
-    if df is None:
-        st.warning("Data belum dimuat.")
-    else:
-        entry, sl, tp, shares, rr, setup_name, conf, signals = calculate_entry_sl_tp(
-            df, capital=modal, risk_percent=risk_pct
-        )
-        if entry:
-            st.success(f"**Setup:** {setup_name} (Confidence: {conf})")
-            st.metric("Entry Price", f"Rp{entry:,.0f}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Stop Loss", f"Rp{sl:,.0f}", delta=f"{- (entry-sl)/entry*100:.2f}%")
-            col2.metric("Take Profit", f"Rp{tp:,.0f}", delta=f"+{(tp-entry)/entry*100:.2f}%")
-            col3.metric("Risk:Reward", f"1:{rr:.2f}")
-            st.write(f"**Jumlah Lot:** {shares} lembar (Rp{shares*entry:,.0f})")
-            st.caption(" | ".join(signals))
-        else:
-            st.warning("Tidak ada setup valid saat ini.")
-
-        support, resistance, pivot, r1, r2, s1, s2, fib382, fib618 = get_pivot_sr(df)
-        st.subheader("Support & Resistance")
-        cols = st.columns(4)
-        cols[0].metric("Support", f"Rp{support:,.0f}")
-        cols[1].metric("Resistance", f"Rp{resistance:,.0f}")
-        cols[2].metric("Pivot", f"Rp{pivot:,.0f}")
-        cols[3].metric("Fib 38.2%", f"Rp{fib382:,.0f}")
-
-        conf_score, factors, grade = calculate_confidence_score(df, ihsg_score)
-        st.subheader(f"Confidence Score: {conf_score:.0f} ({grade})")
-        st.progress(conf_score/100)
-        st.write("**Breakdown:**")
-        for name, score, note in factors:
-            st.write(f"- {name}: {score:+.1f} ({note})")
-
-# ===================== TAB 4: SCANNER =====================
-with tab4:
-    st.header("🔍 Market Scanner")
-    if st.button("Scan Sekarang"):
-        with st.spinner("Scanning saham-saham... (mohon tunggu)"):
-            results = scan_saham()
-        if results:
-            st.dataframe(pd.DataFrame(results), width='stretch')
-        else:
-            st.info("Tidak ada sinyal kuat saat ini.")
-
-    st.divider()
-    st.subheader("🔔 Tes Notifikasi Telegram")
-    if st.button("Tes Kirim Notifikasi"):
-        try:
-            from notification import send_telegram_message
-            test_msg = f"✅ Tes notifikasi Smart Money Engine berhasil!\nWaktu: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            if send_telegram_message(test_msg):
-                st.success("Pesan tes terkirim. Cek Telegram Anda.")
-            else:
-                st.error("Gagal mengirim notifikasi. Periksa token dan chat ID.")
-        except Exception as e:
-            st.error(f"Gagal mengirim: {e}")
-
-# ===================== TAB 5: BACKTEST =====================
-with tab5:
-    st.header("📈 Backtest Profesional")
-    if df is None:
-        st.warning("Data belum dimuat.")
-    else:
-        bt_mode = st.radio("Mode Backtest", ["Standar", "Walk-Forward", "Monte Carlo"], horizontal=True)
-
-        if st.button("Jalankan Backtest"):
-            with st.spinner("Memproses..."):
-                if bt_mode == "Standar":
-                    bt = backtest_strategy(df, modal, risk_pct)
-                    from backtest_engine import calculate_advanced_metrics
-                    advanced = calculate_advanced_metrics(bt['equity_curve'], [], modal)
-                    bt.update(advanced)
-
-                    st.success(f"Backtest selesai. Total trades: {bt['trades']}")
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Return", f"{bt['return']}%", delta=f"Rp{bt['final_capital']-modal:,.0f}")
-                    col2.metric("Win Rate", f"{bt['winrate']}%")
-                    col3.metric("Max Drawdown", f"{bt['max_drawdown']}%")
-
-                    col4, col5, col6 = st.columns(3)
-                    col4.metric("Profit Factor", f"{bt.get('profit_factor', 0):.2f}")
-                    col5.metric("Sharpe Ratio", f"{bt.get('sharpe_ratio', 0):.2f}")
-                    col6.metric("Expectancy", f"{bt.get('expectancy', 0):.2f}%")
-
-                    if bt['equity_curve']:
-                        eq_df = pd.DataFrame({'Equity': bt['equity_curve']})
-                        st.line_chart(eq_df)
-
-                elif bt_mode == "Walk-Forward":
-                    from backtest_engine import walk_forward_backtest
-                    wf_result, wf_error = walk_forward_backtest(symbol_input, 1, 3, modal, risk_pct)
-                    if wf_error:
-                        st.error(wf_error)
-                    else:
-                        st.success("Walk-Forward Analysis selesai")
-                        st.metric("Rata-rata Return per Periode", f"{wf_result['avg_return']}%")
-                        st.metric("Rata-rata Win Rate", f"{wf_result['avg_winrate']}%")
-                        st.write("**Detail per Periode:**")
-                        st.dataframe(pd.DataFrame(wf_result['periods']), width='stretch')
-
-                else:
-                    bt_std = backtest_strategy(df, modal, risk_pct)
-                    if len(bt_std['equity_curve']) > 1:
-                        eq = bt_std['equity_curve']
-                        trade_returns = list(np.diff(eq) / eq[:-1] * 100)
-                        from backtest_engine import monte_carlo_simulation
-                        mc_result = monte_carlo_simulation(trade_returns, 1000, modal)
-                        if mc_result:
-                            st.success("Monte Carlo Simulation (1000 simulasi)")
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric("Median Return", f"{mc_result['median_return']}%")
-                            col2.metric("Worst Return", f"{mc_result['worst_return']}%")
-                            col3.metric("Best Return", f"{mc_result['best_return']}%")
-                            col4, col5 = st.columns(2)
-                            col4.metric("Median Drawdown", f"{mc_result['median_drawdown']}%")
-                            col5.metric("Worst Drawdown", f"{mc_result['worst_drawdown']}%")
-                            st.caption(f"Value at Risk (95% confidence): Rp{mc_result['var_95']:,.0f}")
-                        else:
-                            st.warning("Data trade tidak cukup untuk Monte Carlo.")
-                    else:
-                        st.warning("Data equity curve tidak cukup.")
-
-# ===================== NOTIFICATION SCHEDULER =====================
-import threading
-import schedule
+import yfinance as yf
 import time
-from notification import scan_and_notify
+from datetime import datetime
+from scipy.signal import argrelextrema
+import ta
+import warnings
+warnings.filterwarnings('ignore')
 
-def run_scheduler():
-    modal_default = 100_000_000
-    risk_default = 2.0
-    schedule.every(2).hours.do(
-        scan_and_notify,
-        capital=modal_default,
-        risk_percent=risk_default
-    )
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+# ========== CACHE & RATE LIMIT ==========
+_data_cache = {}
+_last_request_time = 0
+_MIN_REQUEST_INTERVAL = 3
 
-if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
+def _wait_for_rate_limit():
+    global _last_request_time
+    now = time.time()
+    elapsed = now - _last_request_time
+    if elapsed < _MIN_REQUEST_INTERVAL:
+        time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+    _last_request_time = time.time()
+
+# ========== DATA FETCHING ==========
+def get_data(symbol, timeframe="1d"):
+    global _data_cache
+    _wait_for_rate_limit()
+    
+    symbol = symbol.upper()
+    if symbol == "IHSG":
+        symbol = "^JKSE"
+    elif symbol != "^JKSE" and not symbol.endswith('.JK'):
+        symbol = f"{symbol}.JK"
+    
+    cache_key = f"{symbol}_{timeframe}"
+    if cache_key in _data_cache:
+        cached_time, cached_data = _data_cache[cache_key]
+        if (datetime.now() - cached_time).seconds < 60:
+            return cached_data.copy()
+    
+    try:
+        # Coba ambil dari database dulu (hanya untuk timeframe 1d)
+        if timeframe == "1d":
+            try:
+                from database import load_data as db_load, store_data, get_last_date
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                last_date = get_last_date(symbol)
+                if last_date and last_date >= today_str:
+                    df = db_load(symbol)
+                    if not df.empty and len(df) >= 10:
+                        df = df.reset_index()
+                        df.columns = [col.lower() for col in df.columns]
+                        if 'datetime' not in df.columns and 'date' in df.columns:
+                            df.rename(columns={'date': 'datetime'}, inplace=True)
+                        _data_cache[cache_key] = (datetime.now(), df.copy())
+                        return df
+            except ImportError:
+                pass
+        
+        # Fallback: ambil dari Yahoo Finance
+        interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
+        
+        if timeframe == "1d":
+            period = "7d"
+        elif timeframe in ["5m", "15m", "30m", "60m"]:
+            period = "7d"
+        else:
+            period = "3mo"
+        
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
+        
+        if df.empty or len(df) < 10:
+            # Fallback ke database
+            try:
+                from database import load_data as db_load
+                df = db_load(symbol)
+                if not df.empty and len(df) >= 10:
+                    df = df.reset_index()
+                    df.columns = [col.lower() for col in df.columns]
+                    if 'datetime' not in df.columns and 'date' in df.columns:
+                        df.rename(columns={'date': 'datetime'}, inplace=True)
+                    _data_cache[cache_key] = (datetime.now(), df.copy())
+                    return df
+            except:
+                pass
+            return pd.DataFrame()
+        
+        df = df.reset_index()
+        df.columns = [col.lower() for col in df.columns]
+        if 'datetime' not in df.columns and 'date' in df.columns:
+            df.rename(columns={'date': 'datetime'}, inplace=True)
+        
+        if timeframe == "1d":
+            try:
+                from database import store_data
+                store_data(symbol, df)
+            except ImportError:
+                pass
+        
+        _data_cache[cache_key] = (datetime.now(), df.copy())
+        return df
+        
+    except Exception as e:
+        print(f"Error get_data {symbol}: {e}")
+        try:
+            from database import load_data as db_load
+            df = db_load(symbol)
+            if not df.empty and len(df) >= 10:
+                df = df.reset_index()
+                df.columns = [col.lower() for col in df.columns]
+                if 'datetime' not in df.columns and 'date' in df.columns:
+                    df.rename(columns={'date': 'datetime'}, inplace=True)
+                print(f"⚠️ Menggunakan data database untuk {symbol}")
+                return df
+        except:
+            pass
+        return pd.DataFrame()
+
+# ========== INDIKATOR ==========
+def add_indicators(df):
+    if df.empty or len(df) < 14:
+        return df
+    df = df.copy()
+    
+    df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
+    df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
+    df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+    df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
+    
+    df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+    
+    df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
+    df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    
+    df['volume_ma20'] = df['volume'].rolling(window=20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_ma20']
+    
+    df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
+    df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
+    
+    # Supertrend
+    atr_st = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=10)
+    hl_avg = (df['high'] + df['low']) / 2
+    multiplier = 3.0
+    upper_band = hl_avg + (multiplier * atr_st)
+    lower_band = hl_avg - (multiplier * atr_st)
+    
+    df['supertrend'] = 0.0
+    df['supertrend_direction'] = 1
+    for i in range(1, len(df)):
+        if df['close'].iloc[i] > upper_band.iloc[i-1]:
+            df.loc[df.index[i], 'supertrend_direction'] = 1
+        elif df['close'].iloc[i] < lower_band.iloc[i-1]:
+            df.loc[df.index[i], 'supertrend_direction'] = -1
+        else:
+            df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
+        
+        if df['supertrend_direction'].iloc[i] == 1:
+            df.loc[df.index[i], 'supertrend'] = lower_band.iloc[i]
+        else:
+            df.loc[df.index[i], 'supertrend'] = upper_band.iloc[i]
+    
+    # VWAP
+    if 'datetime' in df.columns:
+        df['date'] = pd.to_datetime(df['datetime']).dt.date
+        df['vwap'] = df.groupby('date').apply(
+            lambda g: (g['volume'] * (g['high'] + g['low'] + g['close']) / 3).cumsum() / g['volume'].cumsum()
+        ).reset_index(level=0, drop=True)
+        df.drop('date', axis=1, inplace=True)
+    else:
+        df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    
+    df = df.ffill().bfill().fillna(0)
+    return df
+
+# ========== SWING POINTS ==========
+def detect_swing_points(df, lookback=5, confirmation=2):
+    if df.empty or len(df) < lookback*2 + confirmation:
+        return [], []
+    high = df['high'].values
+    low = df['low'].values
+    safe_end = len(df) - confirmation
+    local_high_idx = argrelextrema(high[:safe_end], np.greater, order=lookback)[0]
+    local_low_idx = argrelextrema(low[:safe_end], np.less, order=lookback)[0]
+    swing_highs = [(int(i), high[i]) for i in local_high_idx]
+    swing_lows = [(int(i), low[i]) for i in local_low_idx]
+    return swing_highs, swing_lows
+
+# ========== BOS & CHOCH ==========
+def detect_bos_choch(df):
+    if df.empty or len(df) < 30:
+        return "NEUTRAL", 0, "Insufficient data"
+    swing_highs, swing_lows = detect_swing_points(df, lookback=5, confirmation=1)
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return "NEUTRAL", 0, "Insufficient swing points"
+    last_close = df.iloc[-1]['close']
+    h1, h2 = swing_highs[-1], swing_highs[-2]
+    l1, l2 = swing_lows[-1], swing_lows[-2]
+    result = "NEUTRAL"
+    confidence = 0
+    signals = []
+    if h1[1] > h2[1] and last_close > h2[1]:
+        result = "BULLISH_BOS"
+        confidence += 40
+        signals.append("BOS UP")
+    elif l1[1] < l2[1] and last_close < l2[1]:
+        result = "BEARISH_BOS"
+        confidence += 40
+        signals.append("BOS DOWN")
+    if len(swing_highs) >= 3 and len(swing_lows) >= 3:
+        if h1[1] < h2[1] and l1[1] > l2[1]:
+            if last_close > df.iloc[h1[0]]['close']:
+                result = "BULLISH_CHOCH"
+                confidence += 35
+                signals.append("CHOCH UP")
+            elif last_close < df.iloc[l1[0]]['close']:
+                result = "BEARISH_CHOCH"
+                confidence += 35
+                signals.append("CHOCH DOWN")
+    desc = " | ".join(signals) if signals else "No BOS/CHOCH"
+    return result, min(100, confidence), desc
+
+# ========== FVG ==========
+def detect_fair_value_gap(df):
+    fvg_bullish, fvg_bearish = [], []
+    if df.empty or len(df) < 3:
+        return [], []
+    for i in range(2, len(df)):
+        vol_ratio = df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns else 1.0
+        if df['low'].iloc[i] > df['high'].iloc[i-2]:
+            body = abs(df['close'].iloc[i] - df['open'].iloc[i])
+            candle_range = df['high'].iloc[i] - df['low'].iloc[i]
+            if candle_range > 0 and body/candle_range > 0.5 and vol_ratio > 1.2:
+                gap = df['low'].iloc[i] - df['high'].iloc[i-2]
+                if gap / df['high'].iloc[i-2] > 0.002:
+                    fvg_bullish.append({
+                        'index': i, 'upper': df['low'].iloc[i],
+                        'lower': df['high'].iloc[i-2], 'strength': vol_ratio
+                    })
+        if df['high'].iloc[i] < df['low'].iloc[i-2]:
+            body = abs(df['close'].iloc[i] - df['open'].iloc[i])
+            candle_range = df['high'].iloc[i] - df['low'].iloc[i]
+            if candle_range > 0 and body/candle_range > 0.5 and vol_ratio > 1.2:
+                gap = df['low'].iloc[i-2] - df['high'].iloc[i]
+                if gap / df['low'].iloc[i-2] > 0.002:
+                    fvg_bearish.append({
+                        'index': i, 'upper': df['low'].iloc[i-2],
+                        'lower': df['high'].iloc[i], 'strength': vol_ratio
+                    })
+    return fvg_bullish, fvg_bearish
+
+def is_fvg_still_valid(df, fvg, current_idx):
+    if fvg is None:
+        return False
+    for i in range(fvg['index']+1, min(current_idx+1, len(df))):
+        if df['low'].iloc[i] <= fvg['upper'] and df['high'].iloc[i] >= fvg['lower']:
+            return False
+    return True
+
+def get_nearest_fvg(df):
+    last_close = df.iloc[-1]['close']
+    fvg_bull, fvg_bear = detect_fair_value_gap(df)
+    current_idx = len(df)-1
+    valid_bull = [f for f in fvg_bull if is_fvg_still_valid(df, f, current_idx) and f['upper'] > last_close]
+    valid_bear = [f for f in fvg_bear if is_fvg_still_valid(df, f, current_idx) and f['lower'] < last_close]
+    nearest_bull = min(valid_bull, key=lambda x: x['upper'] - last_close) if valid_bull else None
+    nearest_bear = min(valid_bear, key=lambda x: last_close - x['lower']) if valid_bear else None
+    return nearest_bull, nearest_bear
+
+# ========== ORDER BLOCK ==========
+def detect_order_blocks(df):
+    bullish_blocks, bearish_blocks = [], []
+    if df.empty or len(df) < 5:
+        return [], []
+    for i in range(2, len(df)-1):
+        atr_i = df['atr'].iloc[i] if pd.notna(df['atr'].iloc[i]) else df['close'].iloc[i]*0.02
+        if df['close'].iloc[i] > df['open'].iloc[i] and df['close'].iloc[i-1] < df['open'].iloc[i-1]:
+            if df['close'].iloc[i] > df['high'].iloc[i-1]:
+                displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
+                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
+                strength = 2 if (displacement and vol_spike) else 1
+                bullish_blocks.append({
+                    'index': i-1, 'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1], 'strength': strength
+                })
+        if df['close'].iloc[i] < df['open'].iloc[i] and df['close'].iloc[i-1] > df['open'].iloc[i-1]:
+            if df['close'].iloc[i] < df['low'].iloc[i-1]:
+                displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
+                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
+                strength = 2 if (displacement and vol_spike) else 1
+                bearish_blocks.append({
+                    'index': i-1, 'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1], 'strength': strength
+                })
+    return bullish_blocks, bearish_blocks
+
+def is_ob_still_valid(df, ob, current_idx):
+    if ob is None:
+        return False
+    for i in range(ob['index']+1, min(current_idx+1, len(df))):
+        if df['high'].iloc[i] >= ob['high'] and df['low'].iloc[i] <= ob['low']:
+            return False
+    return True
+
+def get_nearest_order_block(df):
+    last_close = df.iloc[-1]['close']
+    bull_ob, bear_ob = detect_order_blocks(df)
+    current_idx = len(df)-1
+    valid_bull = [ob for ob in bull_ob if is_ob_still_valid(df, ob, current_idx) and ob['high'] > last_close]
+    valid_bear = [ob for ob in bear_ob if is_ob_still_valid(df, ob, current_idx) and ob['low'] < last_close]
+    nearest_bull = min(valid_bull, key=lambda x: x['high'] - last_close) if valid_bull else None
+    nearest_bear = min(valid_bear, key=lambda x: last_close - x['low']) if valid_bear else None
+    return nearest_bull, nearest_bear
+
+# ========== MARKET STRUCTURE ==========
+def detect_market_structure(df):
+    if df.empty or len(df) < 20:
+        return "RANGE", 0, "Data tidak cukup"
+    bos_cho, conf, desc = detect_bos_choch(df)
+    liq_highs, liq_lows = detect_liquidity_zones(df)
+    signals = [desc]
+    if liq_highs:
+        signals.append(f"Liq High: {min(liq_highs):.0f}")
+    if liq_lows:
+        signals.append(f"Liq Low: {max(liq_lows):.0f}")
+    return bos_cho if "BOS" in bos_cho or "CHOCH" in bos_cho else "RANGE", min(100, conf+10*len(liq_highs+liq_lows)), " | ".join(signals)
+
+# ========== LIQUIDITY ZONES ==========
+def detect_liquidity_zones(df, lookback=20):
+    if df.empty or len(df) < lookback:
+        return [], []
+    recent_highs = df['high'].iloc[-lookback:].tolist()
+    recent_lows = df['low'].iloc[-lookback:].tolist()
+    liq_highs, liq_lows = [], []
+    for h in set(recent_highs):
+        if recent_highs.count(h) >= 2:
+            liq_highs.append(h)
+    for l in set(recent_lows):
+        if recent_lows.count(l) >= 2:
+            liq_lows.append(l)
+    return liq_highs, liq_lows
+
+# ========== LIQUIDITY SWEEP ==========
+def detect_liquidity_sweep(df, lookback=20):
+    if df.empty or len(df) < lookback+5:
+        return False, 0, "NONE", "Data tidak cukup"
+    last = df.iloc[-1]
+    prev_highs = df['high'].iloc[-lookback:-1]
+    prev_lows = df['low'].iloc[-lookback:-1]
+    resistance = prev_highs.max()
+    support = prev_lows.min()
+    sweep_type = "NONE"
+    confidence = 0
+    signals = []
+    if last['low'] < support and last['close'] > support:
+        sweep_type = "BULLISH_SFP"
+        confidence += 50
+        signals.append("Sweep bawah + reversal")
+    elif last['high'] > resistance and last['close'] < resistance:
+        sweep_type = "BEARISH_SFP"
+        confidence += 50
+        signals.append("Sweep atas + reversal")
+    desc = " | ".join(signals) if signals else "No sweep"
+    return sweep_type != "NONE", confidence, sweep_type, desc
+
+# ========== MARKET REGIME ==========
+def detect_market_regime(df):
+    if df.empty or len(df) < 30:
+        return "UNKNOWN", 0, "Data tidak cukup"
+    last = df.iloc[-1]
+    adx = last.get('adx', 0) or 0
+    atr_pct = (last.get('atr', 0)/last['close']*100) if last['close'] != 0 else 0
+    vol_ratio = last.get('volume_ratio', 1) or 1
+    ret_20 = (last['close'] - df['close'].iloc[-21])/df['close'].iloc[-21]*100 if len(df)>20 else 0
+    if adx > 35 and atr_pct > 3:
+        return "STRONG_TRENDING", 85, f"ADX {adx:.0f}, ATR {atr_pct:.1f}%"
+    if adx >= 25:
+        return "TRENDING", 70, f"ADX {adx:.0f}"
+    if ret_20 < -5 or vol_ratio > 2.5:
+        return "PANIC", 80, "Panic selling detected"
+    if adx < 20:
+        return "SIDEWAYS", 40, "Ranging market"
+    return "NEUTRAL", 50, "Normal"
+
+# ========== CANDLESTICK ==========
+def detect_candlestick_pattern(df):
+    if df.empty or len(df) < 3:
+        return "NONE", 0, "Data tidak cukup"
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    body = abs(last['close'] - last['open'])
+    candle_range = last['high'] - last['low']
+    upper_wick = last['high'] - max(last['open'], last['close'])
+    lower_wick = min(last['open'], last['close']) - last['low']
+    pattern = "NONE"
+    conf = 0
+    signals = []
+    if candle_range > 0:
+        if body/candle_range > 0.85:
+            if last['close'] > last['open']:
+                pattern, conf = "BULLISH_MARUBOZU", 30
+                signals.append("Marubozu bullish")
+            else:
+                pattern, conf = "BEARISH_MARUBOZU", -30
+                signals.append("Marubozu bearish")
+        if lower_wick > body*2 and upper_wick < body:
+            pattern, conf = "HAMMER", 35
+            signals.append("Hammer")
+        if upper_wick > body*2 and lower_wick < body:
+            pattern, conf = "SHOOTING_STAR", -35
+            signals.append("Shooting star")
+    if last['close'] > last['open'] and prev['close'] < prev['open'] and last['close'] > prev['open'] and last['open'] < prev['close']:
+        pattern, conf = "BULLISH_ENGULFING", 40
+        signals.append("Bullish engulfing")
+    elif last['close'] < last['open'] and prev['close'] > prev['open'] and last['open'] > prev['close'] and last['close'] < prev['open']:
+        pattern, conf = "BEARISH_ENGULFING", -40
+        signals.append("Bearish engulfing")
+    desc = " | ".join(signals) if signals else "No pattern"
+    return pattern, conf, desc
+
+# ========== PIVOT SR ==========
+def get_pivot_sr(df, lookback=20):
+    if df.empty or len(df) < lookback+5:
+        return 0, 0, 0, 0, 0, 0, 0, 0, 0
+    last = df.iloc[-1]
+    pivot = (last['high'] + last['low'] + last['close'])/3
+    r1 = 2*pivot - last['low']
+    r2 = pivot + (last['high'] - last['low'])
+    s1 = 2*pivot - last['high']
+    s2 = pivot - (last['high'] - last['low'])
+    roll_sup = df['low'].rolling(lookback).min().iloc[-1]
+    roll_res = df['high'].rolling(lookback).max().iloc[-1]
+    high20 = df['high'].iloc[-20:].max()
+    low20 = df['low'].iloc[-20:].min()
+    rng = high20 - low20
+    fib382 = low20 + rng*0.382
+    fib618 = low20 + rng*0.618
+    return roll_sup, roll_res, pivot, r1, r2, s1, s2, fib382, fib618
+
+# ========== CONFIDENCE SCORE ==========
+def calculate_confidence_score(df, ihsg_score=50):
+    if df.empty or len(df) < 30:
+        return 50, [], "NORMAL"
+    last = df.iloc[-1]
+    factors = []
+    total = 50
+    structure, struct_conf, struct_desc = detect_market_structure(df)
+    if "BULLISH" in structure:
+        total += struct_conf * 0.20
+        factors.append(("Structure", struct_conf*0.20, structure))
+    elif "BEARISH" in structure:
+        total -= struct_conf * 0.20
+        factors.append(("Structure", -struct_conf*0.20, structure))
+    else:
+        factors.append(("Structure", 0, "Neutral"))
+    nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
+    fvg_score = 0
+    if nearest_bull_fvg:
+        dist = (nearest_bull_fvg['upper'] - last['close']) / last['close'] * 100
+        fvg_score = 15 if dist < 2 else 5
+        factors.append(("FVG", fvg_score, "Bullish FVG dekat" if dist<2 else "Bullish FVG"))
+    elif nearest_bear_fvg:
+        dist = (last['close'] - nearest_bear_fvg['lower']) / last['close'] * 100
+        fvg_score = -15 if dist < 2 else -5
+        factors.append(("FVG", fvg_score, "Bearish FVG dekat" if dist<2 else "Bearish FVG"))
+    total += fvg_score
+    nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
+    ob_score = 0
+    if nearest_bull_ob:
+        dist = (nearest_bull_ob['high'] - last['close']) / last['close'] * 100
+        ob_score = 15 if dist < 2 else 5
+        factors.append(("OrderBlock", ob_score, "Bullish OB near" if dist<2 else "Bullish OB"))
+    elif nearest_bear_ob:
+        dist = (last['close'] - nearest_bear_ob['low']) / last['close'] * 100
+        ob_score = -15 if dist < 2 else -5
+        factors.append(("OrderBlock", ob_score, "Bearish OB near" if dist<2 else "Bearish OB"))
+    total += ob_score
+    if last['ema20'] > last['ema50']:
+        total += 10
+        factors.append(("Trend", 10, "Bullish"))
+    else:
+        total -= 10
+        factors.append(("Trend", -10, "Bearish"))
+    mom_score = 5 if last['macd_histogram'] > 0 and last['rsi'] > 50 else (-5 if last['macd_histogram'] < 0 and last['rsi'] < 50 else 0)
+    total += mom_score
+    factors.append(("Momentum", mom_score, "MACD+RSI"))
+    vol_score = 10 if last['volume_ratio'] >= 1.5 else (-10 if last['volume_ratio'] < 0.6 else 0)
+    total += vol_score
+    factors.append(("Volume", vol_score, f"Vol ratio {last['volume_ratio']:.1f}"))
+    adx_val = last.get('adx',0) or 0
+    adx_score = 5 if adx_val >= 25 else (-5 if adx_val < 20 else 0)
+    total += adx_score
+    factors.append(("ADX", adx_score, f"ADX {adx_val:.0f}"))
+    regime, regime_conf, _ = detect_market_regime(df)
+    if "TRENDING" in regime or "STRONG" in regime:
+        total += 10
+        factors.append(("Regime", 10, regime))
+    elif regime == "PANIC":
+        total -= 10
+        factors.append(("Regime", -10, regime))
+    else:
+        factors.append(("Regime", 0, regime))
+    market_score = (ihsg_score - 50) * 0.10
+    total += market_score
+    factors.append(("IHSG", market_score, f"Score {ihsg_score:.0f}"))
+    final = max(0, min(100, total))
+    if final >= 80:
+        grade = "SNIPER"
+    elif final >= 65:
+        grade = "HIGH"
+    elif final >= 50:
+        grade = "NORMAL"
+    else:
+        grade = "AVOID"
+    return final, factors, grade
+
+# ========== ENTRY, SL, TP ==========
+def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
+    if df.empty or len(df) < 30:
+        return None, None, None, 0, 0, "NO_SETUP", 0, []
+    last = df.iloc[-1]
+    atr = last.get('atr', last['close']*0.02)
+    if pd.isna(atr) or atr <= 0:
+        atr = last['close'] * 0.02
+    structure, struct_conf, struct_desc = detect_market_structure(df)
+    smart_money, sm_conf, sm_desc = detect_smart_money_volume(df)
+    is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
+    pattern, pattern_conf, pattern_desc = detect_candlestick_pattern(df)
+    regime, regime_conf, regime_desc = detect_market_regime(df)
+    support, resistance, _, _, _, _, _, _, _ = get_pivot_sr(df)
+    nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
+    nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
+    trend_up = last['ema20'] > last['ema50']
+    momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
+    volume_spike = last['volume_ratio'] >= 1.5
+    strong_trend = last.get('adx', 0) >= 25
+    entry_price = None
+    stop_loss = None
+    take_profit = None
+    setup_name = "NO_SETUP"
+    confidence = 0
+    signals = []
+    if "BULLISH" in structure and nearest_bull_fvg and nearest_bull_ob:
+        entry_price = last['close']
+        stop_loss = entry_price - 1.5 * atr
+        take_profit = entry_price + 3 * atr
+        setup_name = "SMART_MONEY_COMBO_BUY"
+        confidence = 85
+        signals = [struct_desc, "Bullish FVG", "Bullish OB"]
+    elif "BULLISH" in structure and volume_spike:
+        entry_price = last['close']
+        stop_loss = entry_price - 2 * atr
+        take_profit = entry_price + 3 * atr
+        setup_name = "BREAKOUT_BUY"
+        confidence = struct_conf
+        signals = [struct_desc]
+    elif pattern in ["BULLISH_ENGULFING", "HAMMER"] and trend_up:
+        entry_price = last['close']
+        stop_loss = entry_price - 1.5 * atr
+        take_profit = entry_price + 3 * atr
+        setup_name = f"{pattern}_BUY"
+        confidence = 65 + abs(pattern_conf)//2
+        signals = [pattern_desc]
+    elif is_sweep and sweep_type == "BULLISH_SFP":
+        entry_price = last['close']
+        stop_loss = entry_price - 1.5 * atr
+        take_profit = entry_price + 2.5 * atr
+        setup_name = "LIQUIDITY_SWEEP_BUY"
+        confidence = sweep_conf
+        signals = [sweep_desc]
+    elif nearest_bull_fvg and (nearest_bull_fvg['upper'] - last['close']) / last['close'] < 0.02:
+        entry_price = last['close']
+        stop_loss = entry_price - 1.5 * atr
+        take_profit = entry_price + 2.5 * atr
+        setup_name = "FVG_BUY"
+        confidence = 70
+        signals = ["Near FVG"]
+    elif nearest_bull_ob and (nearest_bull_ob['high'] - last['close']) / last['close'] < 0.02:
+        entry_price = last['close']
+        stop_loss = entry_price - 1.5 * atr
+        take_profit = entry_price + 2.5 * atr
+        setup_name = "ORDER_BLOCK_BUY"
+        confidence = 70
+        signals = ["Near OB"]
+    elif trend_up and strong_trend and momentum_bullish:
+        entry_price = last['close']
+        stop_loss = entry_price - 2 * atr
+        take_profit = entry_price + 3 * atr
+        setup_name = "TREND_BUY"
+        confidence = 60
+        signals = ["Strong uptrend"]
+    else:
+        return None, None, None, 0, 0, "NO_SETUP", 0, []
+    risk = abs(entry_price - stop_loss)
+    reward = abs(take_profit - entry_price)
+    rr = reward / risk if risk > 0 else 0
+    risk_amount = capital * (risk_percent / 100)
+    shares = int(risk_amount / risk) if risk > 0 else 0
+    max_shares = int((capital * 0.5) / entry_price) if entry_price > 0 else 0
+    shares = min(shares, max_shares)
+    return entry_price, stop_loss, take_profit, shares, rr, setup_name, confidence, signals
+
+def detect_high_quality_setup(df):
+    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
+    if entry:
+        if conf >= 80:
+            return f"{setup} (SNIPER)", conf, " | ".join(signals)
+        elif conf >= 65:
+            return f"{setup} (HIGH)", conf, " | ".join(signals)
+        else:
+            return setup, conf, " | ".join(signals)
+    return "NO_SETUP", 0, "Tidak ada setup"
+
+def get_trading_recommendation(df):
+    entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
+    if entry:
+        if conf >= 80:
+            return f"🎯 {setup} - Sniper eksekusi dengan RR 1:{rr:.1f}"
+        elif conf >= 70:
+            return f"📈 {setup} - Setup bagus, pastikan konfirmasi"
+        elif conf >= 60:
+            return f"⏸️ {setup} - Tunggu konfirmasi lebih lanjut"
+        else:
+            return f"📊 {setup} - Setup medium, hati-hati"
+    return "⛔ NO TRADE ZONE - Hindari entry"
+
+# ========== MULTI TIMEFRAME ==========
+def get_multi_timeframe_alignment(symbol, capital=100000000, risk_percent=2):
+    timeframes = {"daily": "1d", "hourly": "60m", "fifteen": "15m"}
+    results = {}
+    signals = []
+    for name, tf in timeframes.items():
+        df = get_data(symbol, tf)
+        if not df.empty and len(df) > 30:
+            df = add_indicators(df)
+            entry, sl, tp, shares, rr, setup, conf, sigs = calculate_entry_sl_tp(df, capital, risk_percent)
+            last = df.iloc[-1]
+            direction = "BULLISH" if last['ema20'] > last['ema50'] else "BEARISH"
+            structure, struct_conf, _ = detect_market_structure(df)
+            regime, _, _ = detect_market_regime(df)
+            results[name] = {
+                "direction": direction, "structure": structure,
+                "regime": regime, "setup": setup, "confidence": conf,
+                "entry": entry, "stop_loss": sl, "take_profit": tp,
+                "rr": rr, "score": conf
+            }
+            signals.append(f"{name}: {direction}")
+    if len(results) == 3:
+        dirs = [results[t]['direction'] for t in results]
+        if all(d == "BULLISH" for d in dirs):
+            alignment, score = "FULL_BULLISH", 90
+        elif all(d == "BEARISH" for d in dirs):
+            alignment, score = "FULL_BEARISH", 90
+        elif dirs[0] == "BULLISH" and dirs[1] == "BULLISH":
+            alignment, score = "BULLISH_DAILY_HOURLY", 75
+        elif dirs[0] == "BEARISH" and dirs[1] == "BEARISH":
+            alignment, score = "BEARISH_DAILY_HOURLY", 75
+        else:
+            alignment, score = "MIXED", 40
+    else:
+        alignment, score = "INSUFFICIENT_DATA", 50
+    return results, alignment, score, signals
+
+# ========== IHSG TREND ==========
+def get_ihsg_trend():
+    try:
+        ihsg = get_data("^JKSE", "1d")
+        if ihsg.empty or len(ihsg) < 20:
+            return "NEUTRAL", 50, "IHSG data unavailable"
+        ihsg = add_indicators(ihsg)
+        last = ihsg.iloc[-1]
+        if last['close'] > last['ema20'] > last['ema50']:
+            trend = "BULLISH"
+            score = 70
+        elif last['close'] < last['ema20'] < last['ema50']:
+            trend = "BEARISH"
+            score = 30
+        else:
+            trend = "SIDEWAYS"
+            score = 50
+        change = ((last['close'] - ihsg.iloc[-2]['close']) / ihsg.iloc[-2]['close']) * 100
+        return trend, score, f"IHSG {trend} ({change:+.1f}%)"
+    except:
+        return "NEUTRAL", 50, "IHSG error"
+
+# ========== SMART MONEY VOLUME ==========
+def detect_smart_money_volume(df):
+    if df.empty or len(df) < 30:
+        return "NEUTRAL", 0, "Data tidak cukup"
+    last = df.iloc[-1]
+    prev_5 = df.iloc[-6:-1]
+    prev_20 = df.iloc[-21:-1]
+    signals = []
+    conf = 0
+    result = "NEUTRAL"
+    price_range = (prev_20['high'].max() - prev_20['low'].min()) / prev_20['close'].mean()
+    vol_increasing = prev_5['volume'].mean() > prev_20['volume'].mean() * 1.2
+    if price_range < 0.03 and vol_increasing:
+        result = "ACCUMULATION"
+        conf += 40
+        signals.append("Akumulasi")
+    if last['volume_ratio'] > 1.5 and abs(last['close'] - prev_20['close'].mean())/prev_20['close'].mean() < 0.02:
+        result = "DISTRIBUTION"
+        conf += 35
+        signals.append("Distribusi")
+    if last['volume_ratio'] > 2.0 and last['close'] < (last['high']+last['low'])/2:
+        conf += 20
+        signals.append("Volume spike jual")
+    if last['volume_ratio'] > 2.0 and last['close'] > (last['high']+last['low'])/2:
+        conf += 20
+        signals.append("Volume spike beli")
+    desc = " | ".join(signals) if signals else "No smart money volume"
+    return result, min(100, conf), desc
+
+# ========== BACKTEST ==========
+def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
+    if df.empty or len(df) < 30:
+        return {"return": 0, "winrate": 0, "trades": 0, "final_capital": initial_capital, "max_drawdown": 0, "profit_factor": 0, "sharpe_ratio": 0, "expectancy": 0, "equity_curve": []}
+    df_test = df.copy()
+    df_test = add_indicators(df_test)
+    capital = initial_capital
+    position = 0
+    trades = []
+    equity = [initial_capital]
+    peak = initial_capital
+    max_dd = 0
+    entry_price_used = 0
+    stop_price = 0
+    take_price = 0
+    for i in range(20, len(df_test)-1):
+        snapshot = df_test.iloc[:i+1]
+        entry, sl, tp, shares, rr, setup, conf, _ = calculate_entry_sl_tp(snapshot, capital, risk_per_trade)
+        open_next = df_test.iloc[i+1]['open']
+        close_next = df_test.iloc[i+1]['close']
+        low_next = df_test.iloc[i+1]['low']
+        high_next = df_test.iloc[i+1]['high']
+        if entry and "BUY" in setup and position == 0 and shares > 0:
+            entry_price_used = open_next * (1 + slippage)
+            cost = shares * entry_price_used * (1 + fee_buy)
+            if cost <= capital:
+                position = shares
+                capital -= cost
+                stop_price = sl
+                take_price = tp
+        elif position > 0:
+            if low_next <= stop_price:
+                exit_p = stop_price * (1 - slippage)
+                capital += position * exit_p * (1 - fee_sell)
+                pnl = (exit_p - entry_price_used) / entry_price_used * 100
+                trades.append(pnl)
+                position = 0
+            elif high_next >= take_price:
+                exit_p = take_price * (1 - slippage)
+                capital += position * exit_p * (1 - fee_sell)
+                pnl = (exit_p - entry_price_used) / entry_price_used * 100
+                trades.append(pnl)
+                position = 0
+        current_eq = capital + (position * close_next if position else 0)
+        equity.append(current_eq)
+        if current_eq > peak:
+            peak = current_eq
+        dd = (peak - current_eq) / peak * 100 if peak > 0 else 0
+        max_dd = max(max_dd, dd)
+    if position > 0:
+        last_close = df_test.iloc[-1]['close']
+        capital += position * last_close * (1 - fee_sell)
+        equity.append(capital)
+    win_trades = [t for t in trades if t > 0]
+    loss_trades = [t for t in trades if t < 0]
+    winrate = len(win_trades)/len(trades)*100 if trades else 0
+    gross_profit = sum(win_trades) if win_trades else 0
+    gross_loss = abs(sum(loss_trades)) if loss_trades else 0
+    pf = gross_profit/gross_loss if gross_loss else 0
+    total_return = (capital - initial_capital)/initial_capital*100
+    returns = np.diff(equity)/equity[:-1]
+    sharpe = (np.mean(returns)/np.std(returns)*np.sqrt(252)) if len(returns)>0 and np.std(returns)>0 else 0
+    expectancy = np.mean(trades) if trades else 0
+    return {
+        "return": round(total_return, 2), "winrate": round(winrate, 2),
+        "trades": len(trades), "final_capital": round(capital, 0),
+        "max_drawdown": round(max_dd, 2), "profit_factor": round(pf, 2),
+        "sharpe_ratio": round(sharpe, 2), "expectancy": round(expectancy, 2),
+        "equity_curve": equity[-100:]
+    }
+
+# ========== SCANNER ==========
+def scan_saham():
+    try:
+        from scanner_engine import scan_saham_fast
+        return scan_saham_fast()
+    except ImportError:
+        stocks = [
+            "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
+            "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
+            "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
+            "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
+            "MDKA.JK", "ADRO.JK", "ANTM.JK", "AKRA.JK",
+            "BRIS.JK", "INCO.JK", "ITMG.JK", "JPFA.JK",
+            "MAPI.JK", "MEDC.JK", "PGAS.JK", "TOWR.JK",
+            "EXCL.JK", "ISAT.JK", "AMMN.JK", "BYAN.JK",
+            "TPIA.JK", "DSSA.JK", "CUAN.JK", "ADMR.JK",
+            "AADI.JK", "PGEO.JK", "BRPT.JK", "ESSA.JK",
+        ]
+        results = []
+        for stock in stocks:
+            try:
+                df = get_data(stock, "1d")
+                if not df.empty and len(df) > 30:
+                    df = add_indicators(df)
+                    setup, quality, msg = detect_high_quality_setup(df)
+                    if quality >= 60:
+                        signal = "🔥 BUY" if "BUY" in setup else "⏸️ HOLD"
+                        results.append({
+                            "Kode": stock, "Score": f"{quality:.0f}",
+                            "Setup": msg[:40], "Sinyal": signal,
+                            "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
+                        })
+                time.sleep(0.3)
+            except:
+                continue
+        results.sort(key=lambda x: int(x['Score']), reverse=True)
+        return results[:10]
