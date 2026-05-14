@@ -165,10 +165,10 @@ with tab1:
         st.write("**Saham Dipilih:**", symbol_input)
         st.write("**Timeframe:**", timeframe)
     
-    # ========== MARKET CONTEXT PANEL (BARU) ==========
+        # ========== MARKET CONTEXT PANEL ==========
     st.subheader("🌐 Market Context")
     try:
-           from context import get_full_market_context
+        from context import get_full_market_context
         context = get_full_market_context(symbol_input)
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1:
@@ -179,9 +179,7 @@ with tab1:
             st.metric("Sektor", context['sector'])
         with col_m4:
             st.metric("Foreign Flow", context['flow'], delta=context['flow_desc'])
-        
         st.progress(context['breadth_20'] / 100, text=f"Breadth EMA20: {context['breadth_desc']}")
-        
         with st.expander("📊 Performa Sektor (1 Bulan)"):
             sector_df = pd.DataFrame(
                 list(context['sector_performance'].items()),
