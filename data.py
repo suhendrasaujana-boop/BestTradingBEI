@@ -11,7 +11,7 @@ warnings.filterwarnings('ignore')
 # ========== CACHE & RATE LIMIT ==========
 _data_cache = {}
 _last_request_time = 0
-_MIN_REQUEST_INTERVAL = 3  # Naikkan dari 1 menjadi 3 detik
+_MIN_REQUEST_INTERVAL = 3
 
 def _wait_for_rate_limit():
     global _last_request_time
@@ -50,7 +50,6 @@ def get_data(symbol, timeframe="1d"):
                 today_str = datetime.now().strftime('%Y-%m-%d')
                 last_date = get_last_date(symbol)
                 
-                # Kalau data di database ada dan sudah mencakup hari ini, pakai database
                 if last_date and last_date >= today_str:
                     df = db_load(symbol)
                     if not df.empty:
@@ -61,14 +60,13 @@ def get_data(symbol, timeframe="1d"):
                         _data_cache[cache_key] = (datetime.now(), df.copy())
                         return df
             except ImportError:
-                pass  # database.py belum ada, lanjut ke Yahoo
+                pass
         
-            # Fallback: ambil dari Yahoo Finance
+        # Fallback: ambil dari Yahoo Finance
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
         
-        # Untuk 1d, kurangi period agar lebih ringan (cukup 7 hari terakhir)
         if timeframe == "1d":
-            period = "7d"  # dari 3mo jadi 7d saja (lebih cepat)
+            period = "7d"
         elif timeframe in ["5m", "15m", "30m", "60m"]:
             period = "7d"
         else:
@@ -84,7 +82,6 @@ def get_data(symbol, timeframe="1d"):
         if 'datetime' not in df.columns and 'date' in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
         
-        # Simpan ke database (hanya timeframe 1d)
         if timeframe == "1d":
             try:
                 from database import store_data
@@ -95,9 +92,8 @@ def get_data(symbol, timeframe="1d"):
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
         
-        except Exception as e:
+    except Exception as e:
         print(f"Error get_data {symbol}: {e}")
-        # Fallback: coba ambil dari database jika Yahoo gagal
         try:
             from database import load_data as db_load
             df = db_load(symbol)
@@ -111,43 +107,29 @@ def get_data(symbol, timeframe="1d"):
         except:
             pass
         return pd.DataFrame()
+
 # ========== INDIKATOR (pakai library ta) ==========
 def add_indicators(df):
     if df.empty or len(df) < 2:
         return df
     df = df.copy()
-    
-    # EMA
     df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
     df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
     df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
-    
-    # RSI
     df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-    
-    # MACD
     df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
     df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
     df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
-    
-    # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
-    
-    # ATR
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
-    
-    # ADX
     df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
-    
-    # Supertrend (manual karena library 'ta' tidak punya)
     atr_st = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=10)
     hl_avg = (df['high'] + df['low']) / 2
     multiplier = 3.0
     upper_band = hl_avg + (multiplier * atr_st)
     lower_band = hl_avg - (multiplier * atr_st)
-    
     df['supertrend'] = 0.0
     df['supertrend_direction'] = 1
     for i in range(1, len(df)):
@@ -156,20 +138,16 @@ def add_indicators(df):
         prev_lower = lower_band.iloc[i-1]
         curr_upper = upper_band.iloc[i]
         curr_lower = lower_band.iloc[i]
-        
         if df['close'].iloc[i] > prev_upper:
             df.loc[df.index[i], 'supertrend_direction'] = 1
         elif df['close'].iloc[i] < prev_lower:
             df.loc[df.index[i], 'supertrend_direction'] = -1
         else:
             df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
-        
         if df['supertrend_direction'].iloc[i] == 1:
             df.loc[df.index[i], 'supertrend'] = curr_lower
         else:
             df.loc[df.index[i], 'supertrend'] = curr_upper
-    
-    # VWAP reset harian
     if 'datetime' in df.columns:
         df['date'] = pd.to_datetime(df['datetime']).dt.date
         df['vwap'] = df.groupby('date').apply(
@@ -178,11 +156,10 @@ def add_indicators(df):
         df.drop('date', axis=1, inplace=True)
     else:
         df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
-    
     df = df.ffill().bfill().fillna(0)
     return df
 
-# ========== SWING POINTS (no repaint) ==========
+# ========== SWING POINTS ==========
 def detect_swing_points(df, lookback=5, confirmation=2):
     if df.empty or len(df) < lookback*2 + confirmation:
         return [], []
@@ -245,10 +222,8 @@ def detect_fair_value_gap(df):
                 gap = df['low'].iloc[i] - df['high'].iloc[i-2]
                 if gap / df['high'].iloc[i-2] > 0.002:
                     fvg_bullish.append({
-                        'index': i,
-                        'upper': df['low'].iloc[i],
-                        'lower': df['high'].iloc[i-2],
-                        'strength': vol_ratio
+                        'index': i, 'upper': df['low'].iloc[i],
+                        'lower': df['high'].iloc[i-2], 'strength': vol_ratio
                     })
         if df['high'].iloc[i] < df['low'].iloc[i-2]:
             body = abs(df['close'].iloc[i] - df['open'].iloc[i])
@@ -257,10 +232,8 @@ def detect_fair_value_gap(df):
                 gap = df['low'].iloc[i-2] - df['high'].iloc[i]
                 if gap / df['low'].iloc[i-2] > 0.002:
                     fvg_bearish.append({
-                        'index': i,
-                        'upper': df['low'].iloc[i-2],
-                        'lower': df['high'].iloc[i],
-                        'strength': vol_ratio
+                        'index': i, 'upper': df['low'].iloc[i-2],
+                        'lower': df['high'].iloc[i], 'strength': vol_ratio
                     })
     return fvg_bullish, fvg_bearish
 
@@ -295,10 +268,8 @@ def detect_order_blocks(df):
                 vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
                 strength = 2 if (displacement and vol_spike) else 1
                 bullish_blocks.append({
-                    'index': i-1,
-                    'high': df['high'].iloc[i-1],
-                    'low': df['low'].iloc[i-1],
-                    'strength': strength
+                    'index': i-1, 'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1], 'strength': strength
                 })
         if df['close'].iloc[i] < df['open'].iloc[i] and df['close'].iloc[i-1] > df['open'].iloc[i-1]:
             if df['close'].iloc[i] < df['low'].iloc[i-1]:
@@ -306,10 +277,8 @@ def detect_order_blocks(df):
                 vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
                 strength = 2 if (displacement and vol_spike) else 1
                 bearish_blocks.append({
-                    'index': i-1,
-                    'high': df['high'].iloc[i-1],
-                    'low': df['low'].iloc[i-1],
-                    'strength': strength
+                    'index': i-1, 'high': df['high'].iloc[i-1],
+                    'low': df['low'].iloc[i-1], 'strength': strength
                 })
     return bullish_blocks, bearish_blocks
 
@@ -661,16 +630,10 @@ def get_multi_timeframe_alignment(symbol, capital=100000000, risk_percent=2):
             structure, struct_conf, _ = detect_market_structure(df)
             regime, _, _ = detect_market_regime(df)
             results[name] = {
-                "direction": direction,
-                "structure": structure,
-                "regime": regime,
-                "setup": setup,
-                "confidence": conf,
-                "entry": entry,
-                "stop_loss": sl,
-                "take_profit": tp,
-                "rr": rr,
-                "score": conf
+                "direction": direction, "structure": structure,
+                "regime": regime, "setup": setup, "confidence": conf,
+                "entry": entry, "stop_loss": sl, "take_profit": tp,
+                "rr": rr, "score": conf
             }
             signals.append(f"{name}: {direction}")
     if len(results) == 3:
@@ -740,7 +703,7 @@ def detect_smart_money_volume(df):
     desc = " | ".join(signals) if signals else "No smart money volume"
     return result, min(100, conf), desc
 
-# ========== BACKTEST (no lookahead) ==========
+# ========== BACKTEST ==========
 def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
     if df.empty or len(df) < 30:
         return {"return": 0, "winrate": 0, "trades": 0, "final_capital": initial_capital, "max_drawdown": 0, "profit_factor": 0, "sharpe_ratio": 0, "expectancy": 0, "equity_curve": []}
@@ -804,14 +767,10 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
     sharpe = (np.mean(returns)/np.std(returns)*np.sqrt(252)) if len(returns)>0 and np.std(returns)>0 else 0
     expectancy = np.mean(trades) if trades else 0
     return {
-        "return": round(total_return, 2),
-        "winrate": round(winrate, 2),
-        "trades": len(trades),
-        "final_capital": round(capital, 0),
-        "max_drawdown": round(max_dd, 2),
-        "profit_factor": round(pf, 2),
-        "sharpe_ratio": round(sharpe, 2),
-        "expectancy": round(expectancy, 2),
+        "return": round(total_return, 2), "winrate": round(winrate, 2),
+        "trades": len(trades), "final_capital": round(capital, 0),
+        "max_drawdown": round(max_dd, 2), "profit_factor": round(pf, 2),
+        "sharpe_ratio": round(sharpe, 2), "expectancy": round(expectancy, 2),
         "equity_curve": equity[-100:]
     }
 
@@ -821,25 +780,18 @@ def scan_saham():
         from scanner_engine import scan_saham_fast
         return scan_saham_fast()
     except ImportError:
-        # Fallback ke cara lama jika scanner_engine.py tidak ditemukan
         stocks = [
-            # LEVEL 1: MSCI Global Standard (17 saham)
             "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
             "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
             "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
             "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
-            "MDKA.JK",
-            # LEVEL 2: LQ45 Likuid Lainnya (13 saham)
-            "ADRO.JK", "ANTM.JK", "AKRA.JK", "BRIS.JK",
-            "INCO.JK", "ITMG.JK", "JPFA.JK", "MAPI.JK",
-            "MEDC.JK", "PGAS.JK", "TOWR.JK", "EXCL.JK",
-            "ISAT.JK",
-            # LEVEL 3: Energi & Metal (10 saham)
-            "AMMN.JK", "BYAN.JK", "TPIA.JK", "DSSA.JK",
-            "CUAN.JK", "ADMR.JK", "AADI.JK", "PGEO.JK",
-            "BRPT.JK", "ESSA.JK",
+            "MDKA.JK", "ADRO.JK", "ANTM.JK", "AKRA.JK",
+            "BRIS.JK", "INCO.JK", "ITMG.JK", "JPFA.JK",
+            "MAPI.JK", "MEDC.JK", "PGAS.JK", "TOWR.JK",
+            "EXCL.JK", "ISAT.JK", "AMMN.JK", "BYAN.JK",
+            "TPIA.JK", "DSSA.JK", "CUAN.JK", "ADMR.JK",
+            "AADI.JK", "PGEO.JK", "BRPT.JK", "ESSA.JK",
         ]
-        
         results = []
         for stock in stocks:
             try:
@@ -850,15 +802,12 @@ def scan_saham():
                     if quality >= 60:
                         signal = "🔥 BUY" if "BUY" in setup else "⏸️ HOLD"
                         results.append({
-                            "Kode": stock,
-                            "Score": f"{quality:.0f}",
-                            "Setup": msg[:40],
-                            "Sinyal": signal,
+                            "Kode": stock, "Score": f"{quality:.0f}",
+                            "Setup": msg[:40], "Sinyal": signal,
                             "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
                         })
                 time.sleep(0.3)
             except:
                 continue
-        
         results.sort(key=lambda x: int(x['Score']), reverse=True)
         return results[:10]
