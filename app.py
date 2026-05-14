@@ -1,394 +1,319 @@
 import streamlit as st
 import pandas as pd
-import time
+import numpy as np
+import plotly.graph_objects as go
+import os
 from datetime import datetime
 
-# ========== SISTEM LOGIN SEDERHANA (TANPA SUPABASE) ==========
-# Ganti password di sini sesuai keinginan Anda
-CORRECT_PASSWORD = "admin123"  # <-- Ganti dengan password Anda
-
-def check_password():
-    """Fungsi login sederhana dengan password"""
-    
-    # Inisialisasi session state
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "username" not in st.session_state:
-        st.session_state.username = ""
-    
-    # Jika sudah login, return True
-    if st.session_state.authenticated:
-        return True
-    
-    # Tampilkan halaman login
-    st.title("🧠 Smart Money Trading System")
-    st.markdown("Selamat datang! Silakan masukkan password untuk mengakses aplikasi.")
-    
-    username = st.text_input("Username", placeholder="Masukkan nama Anda")
-    password = st.text_input("Password", type="password", placeholder="Masukkan password")
-    
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        login_button = st.button("🔐 Masuk", type="primary", use_container_width=True)
-    
-    if login_button:
-        if not username:
-            st.error("❌ Username harus diisi!")
-        elif password == CORRECT_PASSWORD:
-            st.session_state.authenticated = True
-            st.session_state.username = username
-            st.rerun()
-        else:
-            st.error("❌ Password salah!")
-    
-    # Tampilkan petunjuk
-    with st.expander("ℹ️ Informasi Login"):
-        st.info(f"**Password default:** `{CORRECT_PASSWORD}`\n\nGanti password dengan mengedit variabel `CORRECT_PASSWORD` di file app.py")
-    
-    return False
-
-# Jalankan cek login
-if not check_password():
-    st.stop()
-
-# ========== PAGE CONFIG ==========
+# ===================== WAJIB PALING ATAS =====================
 st.set_page_config(
-    page_title="Smart Money Trading System",
-    page_icon="🧠",
+    page_title="Smart Money Trading Engine",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ========== IMPORT FUNGSI ANALISIS ==========
+# ===================== PASSWORD & SECURITY =====================
+def check_password():
+    """Autentikasi sederhana, gunakan Streamlit secrets untuk production."""
+    correct_password = os.getenv("APP_PASSWORD", st.secrets.get("APP_PASSWORD", None))
+    if not correct_password:
+        # fallback hanya untuk development, jangan hardcode di production
+        correct_password = "dev123"
+        st.sidebar.warning("⚠️  Gunakan environment variable APP_PASSWORD atau Streamlit secrets!")
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        with st.form("login_form"):
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                if password == correct_password:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Password salah")
+            st.stop()
+
+# Panggil autentikasi
+check_password()
+
+# ===================== IMPORTS DATA =====================
 from data import (
-    get_data, add_indicators, get_ihsg_trend,
-    detect_market_structure, detect_smart_money_volume, detect_liquidity_sweep,
-    detect_candlestick_pattern, detect_market_regime, get_pivot_sr,
-    calculate_entry_sl_tp, calculate_confidence_score,
-    scan_saham, get_multi_timeframe_alignment,
-    get_nearest_fvg, get_nearest_order_block
+    get_data,
+    add_indicators,
+    get_ihsg_trend,
+    detect_market_structure,
+    detect_market_regime,
+    detect_liquidity_sweep,
+    detect_candlestick_pattern,
+    detect_smart_money_volume,
+    get_pivot_sr,
+    get_nearest_fvg,
+    get_nearest_order_block,
+    detect_bos_choch,
+    calculate_confidence_score,
+    calculate_entry_sl_tp,
+    get_trading_recommendation,
+    detect_high_quality_setup,
+    get_multi_timeframe_alignment,
+    scan_saham,
+    backtest_strategy
 )
 
-def logout():
-    if st.sidebar.button("🚪 Logout"):
-        for key in ['authenticated', 'username']:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
-
-# ========== SIDEBAR ==========
+# ===================== SIDEBAR =====================
 with st.sidebar:
-    st.title("🧠 Smart Money Trading")
-    st.caption(f"👤 {st.session_state.username} | Market Structure | FVG | Order Block")
-    st.markdown("---")
-    symbol = st.text_input("Kode Saham (contoh: BBCA, BBRI, IHSG)", "IHSG").upper()
-    timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"])
-    st.markdown("---")
-    st.subheader("💰 Risk Management")
-    capital = st.number_input("Modal (Rp)", min_value=1000000, value=100000000, step=1000000)
-    risk_percent = st.slider("Risk per Trade (%)", min_value=0.5, max_value=3.0, value=2.0, step=0.5)
-    st.markdown("---")
-    st.subheader("📋 Status Posisi (Opsional)")
-    has_position = st.checkbox("Saya sudah punya posisi di saham ini")
-    entry_price_manual = 0
-    shares_manual = 0
-    if has_position:
-        entry_price_manual = st.number_input("Harga Entry (Rp)", min_value=0, value=0, step=100)
-        shares_manual = st.number_input("Jumlah Saham", min_value=0, value=0, step=100)
-    st.markdown("---")
-    st.info("**Fitur Smart Money:** Swing Structure, FVG, Order Block, Liquidity Sweep, Multi Timeframe")
-    st.markdown("---")
-    auto_refresh = st.checkbox("Auto Refresh (30 detik)", value=False)
-    if auto_refresh:
-        st.warning("⚠️ Auto refresh aktif - dapat memperlambat sistem karena rate limit Yahoo Finance.")
-    st.caption(f"Update: {datetime.now().strftime('%H:%M:%S')}")
-    logout()
+    st.title("⚙️ Konfigurasi")
+    symbol_input = st.text_input("Kode Saham", value="BBCA").upper()
+    timeframe = st.selectbox("Timeframe", ["1d", "60m", "30m", "15m", "5m"], index=0)
+    modal = st.number_input("Modal (Rp)", value=100_000_000, step=10_000_000, format="%d")
+    risk_pct = st.slider("Risiko per trade (%)", 0.5, 5.0, 2.0, 0.5)
+    st.divider()
+    st.caption("Smart Money Trading Engine v2.0")
+    st.caption("Data dari Yahoo Finance (delay 15m)")
 
-# ========== MAIN CONTENT ==========
-st.title(f"🧠 {symbol} - Smart Money Analysis")
-df = get_data(symbol, timeframe)
-if df.empty:
-    st.warning(f"Data {symbol} kosong. Coba: BBCA, BBRI, BMRI, ASII, atau IHSG.")
-    st.stop()
+# ===================== MAIN TABS =====================
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Overview", "🧠 Smart Money", "⚖️ Risk & Entry", "🔍 Scanner", "📈 Backtest"]
+)
 
-df = add_indicators(df)
-last = df.iloc[-1]
-current_price = last['close']
+# ===================== FUNGSI CHART =====================
+@st.cache_data(ttl=120, show_spinner=False)
+def load_data(symbol, tf):
+    try:
+        df = get_data(symbol, tf)
+        if df.empty:
+            return None, "Data tidak tersedia"
+        df = add_indicators(df)
+        return df, None
+    except Exception as e:
+        return None, str(e)
 
-# MARKET FILTER IHSG
-ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
-entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df, capital, risk_percent)
-support, resistance, pivot, r1, r2, s1, s2, fib_382, fib_618 = get_pivot_sr(df)
-atr = last.get('atr', last['close'] * 0.02) if last['close'] > 0 else 0
-if pd.isna(atr): atr = last['close'] * 0.02
-adx_val = last.get('adx', 0)
-if pd.isna(adx_val): adx_val = 0
+def plot_smart_money_chart(df):
+    """Candlestick interaktif dengan FVG, OB, dan swing points."""
+    if df.empty or len(df) < 30:
+        return None
+    # Ambil 100 candle terakhir agar tidak terlalu berat
+    df_plot = df.iloc[-100:].copy()
+    fig = go.Figure()
+    
+    # Candlestick
+    fig.add_trace(go.Candlestick(
+        x=df_plot.index if 'datetime' not in df_plot.columns else df_plot['datetime'],
+        open=df_plot['open'],
+        high=df_plot['high'],
+        low=df_plot['low'],
+        close=df_plot['close'],
+        name="OHLC",
+        increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
+    ))
+    
+    # Tambahkan FVG zones (bullish = hijau, bearish = merah)
+    fvg_bull, fvg_bear = get_nearest_fvg(df), (None, None)  # dapatkan FVG terdekat
+    # Ambil semua FVG yang masih valid untuk plotting (kita tidak punya fungsi list lengkap, tapi bisa kita ulangi)
+    # Agar tidak terlalu kompleks, kita plot hanya FVG yang menjadi target terdekat
+    last_close = df.iloc[-1]['close']
+    # Plot FVG terdekat (jika ada)
+    nearest_bull, nearest_bear = get_nearest_fvg(df)
+    if nearest_bull:
+        fig.add_hrect(y0=nearest_bull['lower'], y1=nearest_bull['upper'],
+                      fillcolor="rgba(0,255,0,0.2)", line_width=0,
+                      annotation_text="Bullish FVG", annotation_position="top left")
+    if nearest_bear:
+        fig.add_hrect(y0=nearest_bear['lower'], y1=nearest_bear['upper'],
+                      fillcolor="rgba(255,0,0,0.2)", line_width=0,
+                      annotation_text="Bearish FVG", annotation_position="top left")
+    
+    # Plot Order Block terdekat (jika ada)
+    nearest_ob_bull, nearest_ob_bear = get_nearest_order_block(df)
+    if nearest_ob_bull:
+        fig.add_hrect(y0=nearest_ob_bull['low'], y1=nearest_ob_bull['high'],
+                      fillcolor="rgba(0,200,200,0.2)", line_width=1, line_dash="dash",
+                      annotation_text="Bullish OB", annotation_position="bottom left")
+    if nearest_ob_bear:
+        fig.add_hrect(y0=nearest_ob_bear['low'], y1=nearest_ob_bear['high'],
+                      fillcolor="rgba(200,0,200,0.2)", line_width=1, line_dash="dash",
+                      annotation_text="Bearish OB", annotation_position="bottom left")
+    
+    # Plot swing points (BOS/CHOCH) – gunakan swing terdeteksi
+    # Kita ambil data swing dari fungsi detect_swing_points
+    from data import detect_swing_points
+    swing_highs, swing_lows = detect_swing_points(df, lookback=5, confirmation=1)
+    if swing_highs:
+        h_idx = [x[0] for x in swing_highs if x[0] in df_plot.index]
+        h_val = [x[1] for x in swing_highs if x[0] in df_plot.index]
+        fig.add_trace(go.Scatter(x=h_idx, y=h_val, mode='markers',
+                                 marker=dict(symbol='triangle-down', size=8, color='red'),
+                                 name='Swing High'))
+    if swing_lows:
+        l_idx = [x[0] for x in swing_lows if x[0] in df_plot.index]
+        l_val = [x[1] for x in swing_lows if x[0] in df_plot.index]
+        fig.add_trace(go.Scatter(x=l_idx, y=l_val, mode='markers',
+                                 marker=dict(symbol='triangle-up', size=8, color='green'),
+                                 name='Swing Low'))
+    
+    fig.update_layout(
+        height=500,
+        margin=dict(l=0, r=0, t=20, b=0),
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    return fig
 
-# PRIORITY FILTER
-skip_reason = None
-action = "SKIP"
-recommendation_text = ""
-if ihsg_trend == "BEARISH":
-    skip_reason = f"IHSG BEARISH → Market tidak mendukung"
-elif adx_val < 20:
-    skip_reason = f"ADX {adx_val:.1f} (<20) → Pasar sideways"
-elif entry and conf >= 70 and rr >= 1.5:
-    action = "EKSEKUSI BUY"
-    recommendation_text = f"✅ Setup: {setup} | Confidence {conf:.0f} | RR 1:{rr:.1f}"
-elif entry and conf >= 60:
-    action = "TUNGGU KONFIRMASI"
-    recommendation_text = f"⏸️ Setup: {setup} | Confidence {conf:.0f} | Perlu konfirmasi"
-elif entry:
-    action = "SKIP (KUALITAS RENDAH)"
-    recommendation_text = f"❌ Setup {setup} tidak memenuhi kriteria"
-else:
-    action = "SKIP (TIDAK ADA SETUP)"
-    recommendation_text = "Tidak ada setup berkualitas"
-if skip_reason:
-    action = "SKIP"
-    recommendation_text = skip_reason
+# ===================== TAB 1: OVERVIEW =====================
+with tab1:
+    st.header("📊 Market Overview")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # IHSG info
+        ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
+        st.metric("IHSG", ihsg_trend, delta=ihsg_msg)
+    with col2:
+        st.write("**Saham Dipilih:**", symbol_input)
+        st.write("**Timeframe:**", timeframe)
+    
+    df, error = load_data(symbol_input, timeframe)
+    if error:
+        st.error(f"❌ Gagal memuat data: {error}")
+        st.stop()
+    if df is None or len(df) < 30:
+        st.warning("Data tidak cukup untuk analisis (minimal 30 candle).")
+        st.stop()
+    
+    last = df.iloc[-1]
+    # Key metrics
+    colA, colB, colC, colD = st.columns(4)
+    colA.metric("Close", f"Rp{last['close']:,.0f}")
+    colB.metric("RSI", f"{last['rsi']:.1f}")
+    colC.metric("ADX", f"{last['adx']:.1f}" if pd.notna(last['adx']) else "N/A")
+    colD.metric("Volume Ratio", f"{last['volume_ratio']:.2f}x")
+    
+    # Market Regime
+    regime, reg_conf, reg_desc = detect_market_regime(df)
+    st.info(f"**Market Regime:** {regime} (confidence: {reg_conf}) – {reg_desc}")
 
-st.markdown("### 📊 Market Filter")
-if ihsg_trend == "BULLISH":
-    st.success(f"✅ {ihsg_msg}")
-elif ihsg_trend == "BEARISH":
-    st.error(f"⚠️ {ihsg_msg}")
-else:
-    st.warning(f"📊 {ihsg_msg}")
-st.markdown("---")
-
-# SMART MONEY DETECTION
-st.markdown("### 🔍 Smart Money Detection")
-col1, col2, col3, col4, col5 = st.columns(5)
-structure, struct_conf, _ = detect_market_structure(df)
-with col1:
-    if "BULLISH" in structure:
-        st.success(f"**Structure**\n{structure}")
-    elif "BEARISH" in structure:
-        st.error(f"**Structure**\n{structure}")
+# ===================== TAB 2: SMART MONEY =====================
+with tab2:
+    st.header("🧠 Smart Money Analysis")
+    if df is None:
+        st.warning("Data belum dimuat. Silakan kembali ke tab Overview.")
     else:
-        st.info(f"**Structure**\n{structure}")
-    st.caption(f"Conf: {struct_conf:.0f}%")
-sm, sm_conf, _ = detect_smart_money_volume(df)
-with col2:
-    if sm == "ACCUMULATION":
-        st.success(f"**Smart Money**\n{sm}")
-    elif sm == "DISTRIBUTION":
-        st.error(f"**Smart Money**\n{sm}")
-    else:
-        st.info(f"**Smart Money**\n{sm}")
-    st.caption(f"Conf: {sm_conf:.0f}%")
-is_sweep, sweep_conf, sweep_type, _ = detect_liquidity_sweep(df)
-with col3:
-    if sweep_type == "BULLISH_SFP":
-        st.success(f"**Liquidity**\n{sweep_type}")
-    elif sweep_type == "BEARISH_SFP":
-        st.error(f"**Liquidity**\n{sweep_type}")
-    else:
-        st.info(f"**Liquidity**\nTidak ada")
-    st.caption(f"Conf: {sweep_conf:.0f}%")
-nearest_bullish_fvg, nearest_bearish_fvg = get_nearest_fvg(df)
-with col4:
-    if nearest_bullish_fvg:
-        st.success(f"**FVG**\nBullish Gap")
-        st.caption(f"At: Rp{nearest_bullish_fvg['upper']:,.0f}")
-    elif nearest_bearish_fvg:
-        st.error(f"**FVG**\nBearish Gap")
-        st.caption(f"At: Rp{nearest_bearish_fvg['lower']:,.0f}")
-    else:
-        st.info(f"**FVG**\nNo gap")
-        st.caption("-")
-nearest_bullish_ob, nearest_bearish_ob = get_nearest_order_block(df)
-with col5:
-    if nearest_bullish_ob:
-        st.success(f"**Order Block**\nBullish OB")
-        st.caption(f"At: Rp{nearest_bullish_ob['high']:,.0f}")
-    elif nearest_bearish_ob:
-        st.error(f"**Order Block**\nBearish OB")
-        st.caption(f"At: Rp{nearest_bearish_ob['low']:,.0f}")
-    else:
-        st.info(f"**Order Block**\nNo OB")
-        st.caption("-")
-st.markdown("---")
-
-# MARKET REGIME
-st.markdown("### 📈 Market Regime")
-regime, regime_conf, regime_desc = detect_market_regime(df)
-col_r1, col_r2, col_r3 = st.columns(3)
-with col_r1:
-    st.metric("Regime", regime)
-with col_r2:
-    st.metric("ADX", f"{adx_val:.1f}")
-with col_r3:
-    atr_pct = (atr / current_price * 100) if current_price > 0 else 0
-    st.metric("ATR %", f"{atr_pct:.2f}%")
-st.caption(regime_desc)
-st.markdown("---")
-
-# PIVOT SR
-st.markdown("### 📊 Pivot Support & Resistance")
-col_sr1, col_sr2, col_sr3, col_sr4 = st.columns(4)
-with col_sr1:
-    st.metric("Support", f"Rp{support:,.0f}")
-with col_sr2:
-    st.metric("Resistance", f"Rp{resistance:,.0f}")
-with col_sr3:
-    st.metric("Pivot", f"Rp{pivot:,.0f}")
-with col_sr4:
-    st.metric("Fib 61.8%", f"Rp{fib_618:,.0f}")
-st.markdown("---")
-
-# ENTRY, SL, TP
-st.markdown("### 🎯 Entry - Stop Loss - Take Profit")
-if entry:
-    if "BUY" in setup:
-        st.success(f"### 🔥 {setup}")
-    else:
-        st.info(f"### 📊 {setup}")
-    col_e1, col_e2, col_e3 = st.columns(3)
-    with col_e1:
-        st.metric("🎯 ENTRY", f"Rp{entry:,.0f}")
-    with col_e2:
-        st.metric("✂️ STOP LOSS", f"Rp{sl:,.0f}")
-    with col_e3:
-        st.metric("🏁 TAKE PROFIT", f"Rp{tp:,.0f}")
-    col_ps1, col_ps2, col_ps3 = st.columns(3)
-    with col_ps1:
-        st.metric("Position Size", f"{shares:,} saham")
-    with col_ps2:
-        st.metric("Risk/Reward", f"1:{rr:.1f}")
-    with col_ps3:
-        st.metric("Confidence", f"{conf:.0f}/100")
-    if signals:
-        st.caption(" | ".join(signals[:3]))
-else:
-    st.warning("⛔ Tidak ada setup trading berkualitas saat ini")
-st.markdown("---")
-
-# TARGET ALTERNATIF
-if entry and atr > 0:
-    st.markdown("### 🎯 Target Harga Alternatif")
-    target1 = entry + (1.5 * atr)
-    target2 = entry + (2 * atr)
-    col_t1, col_t2, col_t3 = st.columns(3)
-    with col_t1:
-        st.metric("Target 1 (Konservatif)", f"Rp{target1:,.0f}", delta="RR 1:1.5")
-    with col_t2:
-        st.metric("Target 2 (Moderat)", f"Rp{target2:,.0f}", delta="RR 1:2")
-    with col_t3:
-        st.metric("Target 3 (Agresif)", f"Rp{tp:,.0f}", delta="RR 1:3")
-
-# STATUS POSISI
-if has_position and entry_price_manual > 0 and shares_manual > 0:
-    st.markdown("---")
-    st.markdown("### 📋 Status Posisi Anda")
-    pnl_percent = ((current_price - entry_price_manual) / entry_price_manual) * 100
-    pnl_nominal = (current_price - entry_price_manual) * shares_manual
-    col_p1, col_p2, col_p3 = st.columns(3)
-    with col_p1:
-        st.metric("Entry Price", f"Rp{entry_price_manual:,.0f}")
-    with col_p2:
-        st.metric("Current Price", f"Rp{current_price:,.0f}")
-    with col_p3:
-        if pnl_percent >= 0:
-            st.metric("Profit/Loss", f"+{pnl_percent:.2f}%", delta=f"+Rp{pnl_nominal:,.0f}")
+        # Chart interaktif
+        st.subheader("Price Action & Smart Money Zones")
+        fig = plot_smart_money_chart(df)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.metric("Profit/Loss", f"{pnl_percent:.2f}%", delta=f"-Rp{abs(pnl_nominal):,.0f}")
-    if pnl_percent > 5:
-        st.success("✅ Posisi sudah aman, pertimbangkan trailing stop")
-    elif pnl_percent > 0:
-        st.info("📈 Posisi positif, tahan dengan stop loss di entry")
-    elif pnl_percent > -5:
-        st.warning("⚠️ Posisi sedikit rugi, pantau support terdekat")
+            st.info("Chart tidak dapat ditampilkan karena data kurang.")
+        
+        # Detail SMC
+        col1, col2 = st.columns(2)
+        with col1:
+            structure, struct_conf, struct_desc = detect_market_structure(df)
+            bos_cho, bos_conf, bos_desc = detect_bos_choch(df)
+            st.metric("Market Structure", structure, delta=f"Conf: {struct_conf}")
+            st.caption(f"BOS/CHOCH: {bos_cho} ({bos_desc})")
+            
+            # FVG
+            nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
+            if nearest_bull_fvg:
+                st.success(f"✅ Bullish FVG terdekat di {nearest_bull_fvg['upper']:.2f} - {nearest_bull_fvg['lower']:.2f}")
+            elif nearest_bear_fvg:
+                st.error(f"❌ Bearish FVG terdekat di {nearest_bear_fvg['upper']:.2f} - {nearest_bear_fvg['lower']:.2f}")
+            else:
+                st.info("Tidak ada FVG valid")
+        
+        with col2:
+            regime, reg_conf, reg_desc = detect_market_regime(df)
+            st.metric("Market Regime", regime, delta=f"Conf: {reg_conf}")
+            
+            # Order Block
+            nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
+            if nearest_bull_ob:
+                st.success(f"✅ Bullish OB di {nearest_bull_ob['high']:.2f} - {nearest_bull_ob['low']:.2f}")
+            elif nearest_bear_ob:
+                st.error(f"❌ Bearish OB di {nearest_bear_ob['high']:.2f} - {nearest_bear_ob['low']:.2f}")
+            else:
+                st.info("Tidak ada Order Block")
+        
+        # Liquidity Sweep
+        is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
+        if is_sweep:
+            st.warning(f"⚡ Liquidity Sweep terdeteksi: {sweep_type} ({sweep_desc})")
+
+# ===================== TAB 3: RISK & ENTRY =====================
+with tab3:
+    st.header("⚖️ Risk Management & Setup")
+    if df is None:
+        st.warning("Data belum dimuat.")
     else:
-        st.error("🔴 Posisi rugi besar, pertimbangkan cut loss")
-
-# PERINGATAN RISIKO
-st.markdown("---")
-st.markdown("### ⚠️ Peringatan Risiko")
-if entry and sl:
-    risk_amount = (entry - sl) * shares
-    st.caption(f"• Stop Loss: Rp{sl:,.0f} ({(entry-sl)/entry*100:.2f}% dari entry)")
-    st.caption(f"• Risk per trade: {risk_percent}% dari modal → Rp{capital * risk_percent / 100:,.0f}")
-    if risk_amount > 0:
-        st.caption(f"• Maksimal kerugian jika kena SL: Rp{risk_amount:,.0f}")
-    if ihsg_trend == "BEARISH":
-        st.error("⚠️ IHSG BEARISH → Risiko lebih tinggi! Sebaiknya hindari entry baru.")
-    elif adx_val < 20:
-        st.warning("⚠️ ADX rendah (<20) → Pasar sideways, stop loss rawan tersapu.")
-else:
-    st.info("Tidak ada setup aktif, risiko rendah.")
-
-# CONFIDENCE SCORE
-st.markdown("---")
-st.markdown("### 📊 Confidence Score")
-confidence, factors, grade = calculate_confidence_score(df, ihsg_score)
-col_conf1, col_conf2 = st.columns([1, 2])
-with col_conf1:
-    st.metric("Total Score", f"{confidence:.0f}", delta=grade)
-with col_conf2:
-    for name, score, desc in factors[:5]:
-        if score > 0:
-            st.caption(f"✅ {name}: +{score:.0f} ({desc})")
+        entry, sl, tp, shares, rr, setup_name, conf, signals = calculate_entry_sl_tp(
+            df, capital=modal, risk_percent=risk_pct
+        )
+        if entry:
+            st.success(f"**Setup:** {setup_name} (Confidence: {conf})")
+            st.metric("Entry Price", f"Rp{entry:,.0f}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Stop Loss", f"Rp{sl:,.0f}", delta=f"{- (entry-sl)/entry*100:.2f}%")
+            col2.metric("Take Profit", f"Rp{tp:,.0f}", delta=f"+{(tp-entry)/entry*100:.2f}%")
+            col3.metric("Risk:Reward", f"1:{rr:.2f}")
+            st.write(f"**Jumlah Lot:** {shares} lembar (Rp{shares*entry:,.0f})")
+            st.caption(" | ".join(signals))
         else:
-            st.caption(f"❌ {name}: {score:.0f} ({desc})")
-st.markdown("---")
+            st.warning("Tidak ada setup valid saat ini.")
+        
+        # Detail support resistance
+        support, resistance, pivot, r1, r2, s1, s2, fib382, fib618 = get_pivot_sr(df)
+        st.subheader("Support & Resistance")
+        cols = st.columns(4)
+        cols[0].metric("Support", f"Rp{support:,.0f}")
+        cols[1].metric("Resistance", f"Rp{resistance:,.0f}")
+        cols[2].metric("Pivot", f"Rp{pivot:,.0f}")
+        cols[3].metric("Fib 38.2%", f"Rp{fib382:,.0f}")
+        
+        # Confidence score
+        conf_score, factors, grade = calculate_confidence_score(df, ihsg_score)
+        st.subheader(f"Confidence Score: {conf_score:.0f} ({grade})")
+        st.progress(conf_score/100)
+        st.write("**Breakdown:**")
+        for name, score, note in factors:
+            st.write(f"- {name}: {score:+.1f} ({note})")
 
-# REKOMENDASI AKHIR
-st.markdown("### 🎯 REKOMENDASI AKHIR")
-if action == "EKSEKUSI BUY":
-    st.success(f"## ✅ {action}")
-elif action == "TUNGGU KONFIRMASI":
-    st.info(f"## ⏸️ {action}")
-else:
-    st.error(f"## ⛔ {action}")
-if recommendation_text:
-    st.markdown(f"**{recommendation_text}**")
-if skip_reason:
-    st.warning(f"📌 **Kesimpulan:** {skip_reason}. Sebaiknya hindari trading {symbol} hari ini.")
-elif action == "EKSEKUSI BUY":
-    st.success(f"📌 **Kesimpulan:** Semua filter terpenuhi. Anda bisa mempertimbangkan untuk membeli {symbol} di sekitar Rp{entry:,.0f} dengan stop loss Rp{sl:,.0f} dan target Rp{tp:,.0f}.")
-elif action == "TUNGGU KONFIRMASI":
-    st.info(f"📌 **Kesimpulan:** Kondisi masih kurang ideal. Tunggu konfirmasi tambahan sebelum entry.")
-else:
-    st.warning(f"📌 **Kesimpulan:** Tidak ada setup berkualitas. Tetap hold cash.")
-st.markdown("---")
-
-# MULTI TIMEFRAME ALIGNMENT
-st.markdown("### ⏰ Multi Timeframe Alignment")
-with st.spinner("Menganalisis multi timeframe..."):
-    mtf_results, alignment, alignment_score, mtf_signals = get_multi_timeframe_alignment(symbol, capital, risk_percent)
-col_mtf1, col_mtf2, col_mtf3 = st.columns(3)
-tf_keys = list(mtf_results.keys())
-for i, tf_name in enumerate(tf_keys[:3]):
-    tf_data = mtf_results[tf_name]
-    with [col_mtf1, col_mtf2, col_mtf3][i]:
-        st.subheader(tf_name.upper())
-        st.metric("Direction", tf_data['direction'])
-        if tf_data['entry']:
-            st.caption(f"Entry: Rp{tf_data['entry']:,.0f}")
-            st.caption(f"SL: Rp{tf_data['stop_loss']:,.0f}")
-if alignment_score >= 80:
-    st.success(f"### ✅ {alignment} - Semua timeframe searah! (Score: {alignment_score})")
-elif alignment_score >= 60:
-    st.info(f"### 📊 {alignment} - Sebagian searah (Score: {alignment_score})")
-else:
-    st.warning(f"### ⚠️ {alignment} - Timeframe kontradiksi (Score: {alignment_score})")
-st.markdown("---")
-
-# SCANNER
-st.markdown("### 🔍 Scanner Saham")
-if st.button("🚀 SCAN MARKET", use_container_width=True):
-    with st.spinner("Scanning market..."):
-        results = scan_saham()
+# ===================== TAB 4: SCANNER =====================
+with tab4:
+    st.header("🔍 Market Scanner")
+    if st.button("Scan Sekarang"):
+        with st.spinner("Scanning saham-saham... (mohon tunggu)"):
+            results = scan_saham()
         if results:
-            df_scan = pd.DataFrame(results)
-            st.dataframe(df_scan, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
-            st.warning("Tidak ada setup berkualitas")
+            st.info("Tidak ada sinyal kuat saat ini.")
 
-st.markdown("---")
-st.caption("⚠️ DISCLAIMER: Sistem berbasis Smart Money (BOS, FVG, Order Block). Rekomendasi hanya alat bantu, bukan keputusan investasi.")
-if auto_refresh:
-    time.sleep(30)
-    st.rerun()
+# ===================== TAB 5: BACKTEST =====================
+with tab5:
+    st.header("📈 Backtest Strategi")
+    if df is None:
+        st.warning("Data belum dimuat.")
+    else:
+        if st.button("Jalankan Backtest"):
+            with st.spinner("Memproses..."):
+                bt = backtest_strategy(df, modal, risk_pct)
+            st.success(f"Backtest selesai. Total trades: {bt['trades']}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Return", f"{bt['return']}%", delta=f"Rp{bt['final_capital']-modal:,.0f}")
+            col2.metric("Win Rate", f"{bt['winrate']}%")
+            col3.metric("Max Drawdown", f"{bt['max_drawdown']}%")
+            col4, col5, col6 = st.columns(3)
+            col4.metric("Profit Factor", f"{bt['profit_factor']:.2f}")
+            col5.metric("Sharpe Ratio", f"{bt['sharpe_ratio']:.2f}")
+            col6.metric("Expectancy", f"{bt['expectancy']:.2f}%")
+            
+            # Equity curve
+            if bt['equity_curve']:
+                eq_df = pd.DataFrame({'Equity': bt['equity_curve']})
+                st.line_chart(eq_df)
