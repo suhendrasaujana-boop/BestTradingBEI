@@ -4,7 +4,7 @@ numpy
 yfinance
 plotly
 matplotlib
-pandas-ta
+ta
 scipy
 statsmodels
 python-dotenv
