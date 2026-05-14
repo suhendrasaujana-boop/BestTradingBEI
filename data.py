@@ -22,7 +22,11 @@ def _wait_for_rate_limit():
     _last_request_time = time.time()
 
 # ========== DATA FETCHING ==========
-def get_data(symbol, timeframe="1d"):
+ddef get_data(symbol, timeframe="1d"):
+    """
+    Ambil data dari database lokal dulu.
+    Kalau tidak ada atau butuh update, fetch dari Yahoo Finance lalu simpan ke database.
+    """
     global _data_cache
     _wait_for_rate_limit()
     
@@ -39,8 +43,30 @@ def get_data(symbol, timeframe="1d"):
             return cached_data.copy()
     
     try:
+        # Coba ambil dari database dulu (hanya untuk timeframe 1d)
+        if timeframe == "1d":
+            try:
+                from database import load_data as db_load, store_data, get_last_date
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                last_date = get_last_date(symbol)
+                
+                # Kalau data di database ada dan sudah mencakup hari ini, pakai database
+                if last_date and last_date >= today_str:
+                    df = db_load(symbol)
+                    if not df.empty:
+                        df = df.reset_index()
+                        df.columns = [col.lower() for col in df.columns]
+                        if 'datetime' not in df.columns and 'date' in df.columns:
+                            df.rename(columns={'date': 'datetime'}, inplace=True)
+                        _data_cache[cache_key] = (datetime.now(), df.copy())
+                        return df
+            except ImportError:
+                pass  # database.py belum ada, lanjut ke Yahoo
+        
+        # Fallback: ambil dari Yahoo Finance
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
         period = "7d" if timeframe in ["5m", "15m", "30m", "60m"] else "3mo"
+        
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         if df.empty:
@@ -51,8 +77,17 @@ def get_data(symbol, timeframe="1d"):
         if 'datetime' not in df.columns and 'date' in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
         
+        # Simpan ke database (hanya timeframe 1d)
+        if timeframe == "1d":
+            try:
+                from database import store_data
+                store_data(symbol, df)
+            except ImportError:
+                pass
+        
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
+        
     except Exception as e:
         print(f"Error get_data {symbol}: {e}")
         return pd.DataFrame()
