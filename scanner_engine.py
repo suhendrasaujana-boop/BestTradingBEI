@@ -12,7 +12,7 @@ CACHE_DIR = "cache"
 def _get_all_bei_tickers():
     """Ambil SEMUA kode saham BEI dari beisfinder."""
     try:
-        from beisfinder import get_stock_list
+        from idx_scraper import get_all_bei_tickers
         tickers = get_stock_list()
         print(f"📋 {len(tickers)} emiten terdaftar di BEI")
         return tickers
