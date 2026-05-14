@@ -62,11 +62,7 @@ from data import (
     backtest_strategy
 )
 
-# ===================== IMPORT MARKET CONTEXT =====================
-from context import get_full_market_context, relative_strength_vs_ihsg, get_market_breadth
-
-# ===================== IMPORT BACKTEST ENGINE =====================
-from backtest_engine import run_full_backtest, walk_forward_backtest, monte_carlo_simulation
+# Tidak import di sini, akan dipanggil saat dibutuhkan saja
 
 # ===================== SIDEBAR =====================
 with st.sidebar:
