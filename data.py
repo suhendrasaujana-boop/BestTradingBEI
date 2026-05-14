@@ -95,7 +95,7 @@ def get_data(symbol, timeframe="1d"):
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
         
-     except Exception as e:
+        except Exception as e:
         print(f"Error get_data {symbol}: {e}")
         # Fallback: coba ambil dari database jika Yahoo gagal
         try:
