@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+import time as time_module
 
 DB_PATH = "market_data.db"
 
@@ -47,7 +48,13 @@ def store_data(symbol, df):
     elif 'date' in df_copy.columns:
         df_copy['date'] = pd.to_datetime(df_copy['date']).dt.strftime('%Y-%m-%d')
     else:
-        df_copy['date'] = pd.to_datetime(df_copy.index).strftime('%Y-%m-%d')
+        # Coba ambil dari index
+        try:
+            df_copy['date'] = pd.to_datetime(df_copy.index).strftime('%Y-%m-%d')
+        except:
+            print(f"⚠️ Tidak bisa extract date dari {symbol}")
+            conn.close()
+            return
     
     # Normalisasi nama kolom ke lowercase
     df_copy.columns = [c.lower() for c in df_copy.columns]
@@ -60,20 +67,22 @@ def store_data(symbol, df):
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 symbol,
-                row['date'],
-                row.get('open', 0),
-                row.get('high', 0),
-                row.get('low', 0),
-                row.get('close', 0),
-                row.get('volume', 0)
+                str(row['date']),
+                float(row.get('open', 0)),
+                float(row.get('high', 0)),
+                float(row.get('low', 0)),
+                float(row.get('close', 0)),
+                float(row.get('volume', 0))
             ))
             inserted += 1
         except Exception as e:
-            print(f"Gagal insert {symbol} {row['date']}: {e}")
+            print(f"⚠️ Gagal insert {symbol} baris {row.get('date', '?')}: {e}")
     
     conn.commit()
     conn.close()
-    print(f"💾 {symbol}: {inserted} baris disimpan ke database.")
+    
+    if inserted > 0:
+        print(f"💾 {symbol}: {inserted} baris disimpan ke database.")
 
 def load_data(symbol, start_date=None, end_date=None):
     """
@@ -94,14 +103,23 @@ def load_data(symbol, start_date=None, end_date=None):
     
     query += " ORDER BY date ASC"
     
-    df = pd.read_sql_query(query, conn, params=params)
+    try:
+        df = pd.read_sql_query(query, conn, params=params)
+    except Exception as e:
+        print(f"⚠️ Error load_data {symbol}: {e}")
+        conn.close()
+        return pd.DataFrame()
+    
     conn.close()
     
     if df.empty:
         return df
     
+    # Konversi ke datetime dan set index
     df['date'] = pd.to_datetime(df['date'])
     df = df.set_index('date')
+    df = df.sort_index()
+    
     return df
 
 def get_last_date(symbol):
@@ -111,15 +129,15 @@ def get_last_date(symbol):
     cursor.execute("SELECT MAX(date) FROM daily_prices WHERE symbol = ?", (symbol,))
     result = cursor.fetchone()
     conn.close()
-    return result[0] if result[0] else None
+    return result[0] if result and result[0] else None
 
 def update_daily_data(symbols=None):
     """
     Update data harian dengan jeda aman (2 detik per saham).
     Hanya mengunduh data yang belum ada di database.
     """
-    from data import get_data as fetch_from_yahoo
-    import time as time_module
+    # Lazy import untuk hindari circular
+    from data import get_data as fetch_data
     
     if symbols is None:
         symbols = [
@@ -139,6 +157,8 @@ def update_daily_data(symbols=None):
     updated = 0
     skipped = 0
     
+    print(f"\n📦 Mulai update {len(symbols)} saham...")
+    
     for i, sym in enumerate(symbols):
         try:
             last_date = get_last_date(sym)
@@ -147,24 +167,32 @@ def update_daily_data(symbols=None):
                 continue  # Sudah punya data hari ini
             
             print(f"[{i+1}/{len(symbols)}] Mengunduh {sym}...")
-            df = fetch_from_yahoo(sym, "1d")
+            df = fetch_data(sym, "1d")
             if not df.empty:
                 store_data(sym, df)
                 updated += 1
+            else:
+                print(f"  ⚠️ {sym}: Data kosong")
             
-            # Jeda 2 detik antar request (40 saham = 80 detik)
+            # Jeda 2 detik antar request
             if i < len(symbols) - 1:
                 time_module.sleep(2)
                 
         except Exception as e:
+            error_msg = str(e).lower()
             print(f"⚠️ Gagal update {sym}: {e}")
+            
             # Jika kena rate limit, tunggu lebih lama
-            if "rate" in str(e).lower() or "limit" in str(e).lower():
+            if "rate" in error_msg or "limit" in error_msg or "too many" in error_msg:
                 print("⏳ Rate limit terdeteksi, menunggu 60 detik...")
                 time_module.sleep(60)
+            else:
+                time_module.sleep(1)
     
-    print(f"✅ {updated} saham diperbarui, {skipped} saham sudah ada di database.")
+    print(f"\n✅ Selesai: {updated} saham diperbarui, {skipped} saham sudah ada di database.")
     return updated
 
+
 # Inisialisasi database saat file di-import
-init_db()
+if __name__ != "__main__":
+    init_db()
