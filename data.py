@@ -23,10 +23,6 @@ def _wait_for_rate_limit():
 
 # ========== DATA FETCHING ==========
 def get_data(symbol, timeframe="1d"):
-    """
-    Ambil data dari database lokal dulu.
-    Kalau tidak ada atau butuh update, fetch dari Yahoo Finance lalu simpan ke database.
-    """
     global _data_cache
     _wait_for_rate_limit()
     
@@ -46,16 +42,16 @@ def get_data(symbol, timeframe="1d"):
         # Coba ambil dari database dulu (hanya untuk timeframe 1d)
         if timeframe == "1d":
             try:
-                from database import load_data as db_load, store_data, get_last_date
+                from database import load_data, store_data, get_last_date
                 today_str = datetime.now().strftime('%Y-%m-%d')
                 last_date = get_last_date(symbol)
                 
                 if last_date and last_date >= today_str:
-                    df = db_load(symbol)
-                    if not df.empty:
+                    df = load_data(symbol)
+                    if not df.empty and len(df) >= 10:
                         df = df.reset_index()
                         df.columns = [col.lower() for col in df.columns]
-                        if 'datetime' not in df.columns and 'date' in df.columns:
+                        if 'date' in df.columns and 'datetime' not in df.columns:
                             df.rename(columns={'date': 'datetime'}, inplace=True)
                         _data_cache[cache_key] = (datetime.now(), df.copy())
                         return df
@@ -66,20 +62,33 @@ def get_data(symbol, timeframe="1d"):
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
         
         if timeframe == "1d":
-            period = "7d"
+            period = "1mo"
         elif timeframe in ["5m", "15m", "30m", "60m"]:
-            period = "7d"
+            period = "5d"
         else:
             period = "3mo"
         
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
-        if df.empty:
+        
+        if df.empty or len(df) < 10:
+            try:
+                from database import load_data
+                df = load_data(symbol)
+                if not df.empty and len(df) >= 10:
+                    df = df.reset_index()
+                    df.columns = [col.lower() for col in df.columns]
+                    if 'date' in df.columns and 'datetime' not in df.columns:
+                        df.rename(columns={'date': 'datetime'}, inplace=True)
+                    _data_cache[cache_key] = (datetime.now(), df.copy())
+                    return df
+            except:
+                pass
             return pd.DataFrame()
         
         df = df.reset_index()
         df.columns = [col.lower() for col in df.columns]
-        if 'datetime' not in df.columns and 'date' in df.columns:
+        if 'date' in df.columns and 'datetime' not in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
         
         if timeframe == "1d":
@@ -95,12 +104,12 @@ def get_data(symbol, timeframe="1d"):
     except Exception as e:
         print(f"Error get_data {symbol}: {e}")
         try:
-            from database import load_data as db_load
-            df = db_load(symbol)
-            if not df.empty:
+            from database import load_data
+            df = load_data(symbol)
+            if not df.empty and len(df) >= 10:
                 df = df.reset_index()
                 df.columns = [col.lower() for col in df.columns]
-                if 'datetime' not in df.columns and 'date' in df.columns:
+                if 'date' in df.columns and 'datetime' not in df.columns:
                     df.rename(columns={'date': 'datetime'}, inplace=True)
                 print(f"⚠️ Menggunakan data database untuk {symbol}")
                 return df
@@ -108,54 +117,62 @@ def get_data(symbol, timeframe="1d"):
             pass
         return pd.DataFrame()
 
-# ========== INDIKATOR (pakai library ta) ==========
+# ========== INDIKATOR ==========
 def add_indicators(df):
-    if df.empty or len(df) < 2:
+    if df.empty or len(df) < 14:
         return df
     df = df.copy()
+    
     df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
     df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
     df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
+    
     df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-    df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
-    df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
-    df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    
+    macd = ta.trend.MACD(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    df['macd'] = macd.macd()
+    df['macd_signal'] = macd.macd_signal()
+    df['macd_histogram'] = macd.macd_diff()
+    
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_ma20']
+    df['volume_ratio'] = df['volume'] / df['volume_ma20'].replace(0, np.nan)
+    
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
     df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
+    
+    # Supertrend
     atr_st = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=10)
     hl_avg = (df['high'] + df['low']) / 2
     multiplier = 3.0
     upper_band = hl_avg + (multiplier * atr_st)
     lower_band = hl_avg - (multiplier * atr_st)
+    
     df['supertrend'] = 0.0
     df['supertrend_direction'] = 1
     for i in range(1, len(df)):
-        prev_close = df['close'].iloc[i-1]
-        prev_upper = upper_band.iloc[i-1]
-        prev_lower = lower_band.iloc[i-1]
-        curr_upper = upper_band.iloc[i]
-        curr_lower = lower_band.iloc[i]
-        if df['close'].iloc[i] > prev_upper:
+        if df['close'].iloc[i] > upper_band.iloc[i-1]:
             df.loc[df.index[i], 'supertrend_direction'] = 1
-        elif df['close'].iloc[i] < prev_lower:
+        elif df['close'].iloc[i] < lower_band.iloc[i-1]:
             df.loc[df.index[i], 'supertrend_direction'] = -1
         else:
             df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
+        
         if df['supertrend_direction'].iloc[i] == 1:
-            df.loc[df.index[i], 'supertrend'] = curr_lower
+            df.loc[df.index[i], 'supertrend'] = lower_band.iloc[i]
         else:
-            df.loc[df.index[i], 'supertrend'] = curr_upper
+            df.loc[df.index[i], 'supertrend'] = upper_band.iloc[i]
+    
+    # VWAP
     if 'datetime' in df.columns:
         df['date'] = pd.to_datetime(df['datetime']).dt.date
         df['vwap'] = df.groupby('date').apply(
-            lambda g: (g['volume'] * (g['high'] + g['low'] + g['close']) / 3).cumsum() / g['volume'].cumsum()
+            lambda g: (g['volume'] * (g['high'] + g['low'] + g['close']) / 3).cumsum() / g['volume'].cumsum().replace(0, np.nan)
         ).reset_index(level=0, drop=True)
         df.drop('date', axis=1, inplace=True)
     else:
-        df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+        df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum().replace(0, np.nan)
+    
     df = df.ffill().bfill().fillna(0)
     return df
 
@@ -194,8 +211,6 @@ def detect_bos_choch(df):
         confidence += 40
         signals.append("BOS DOWN")
     if len(swing_highs) >= 3 and len(swing_lows) >= 3:
-        h3 = swing_highs[-3]
-        l3 = swing_lows[-3]
         if h1[1] < h2[1] and l1[1] > l2[1]:
             if last_close > df.iloc[h1[0]]['close']:
                 result = "BULLISH_CHOCH"
@@ -214,7 +229,7 @@ def detect_fair_value_gap(df):
     if df.empty or len(df) < 3:
         return [], []
     for i in range(2, len(df)):
-        vol_ratio = df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns else 1.0
+        vol_ratio = df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns and pd.notna(df['volume_ratio'].iloc[i]) else 1.0
         if df['low'].iloc[i] > df['high'].iloc[i-2]:
             body = abs(df['close'].iloc[i] - df['open'].iloc[i])
             candle_range = df['high'].iloc[i] - df['low'].iloc[i]
@@ -265,7 +280,7 @@ def detect_order_blocks(df):
         if df['close'].iloc[i] > df['open'].iloc[i] and df['close'].iloc[i-1] < df['open'].iloc[i-1]:
             if df['close'].iloc[i] > df['high'].iloc[i-1]:
                 displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
-                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
+                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns and pd.notna(df['volume_ratio'].iloc[i]) else True
                 strength = 2 if (displacement and vol_spike) else 1
                 bullish_blocks.append({
                     'index': i-1, 'high': df['high'].iloc[i-1],
@@ -274,7 +289,7 @@ def detect_order_blocks(df):
         if df['close'].iloc[i] < df['open'].iloc[i] and df['close'].iloc[i-1] > df['open'].iloc[i-1]:
             if df['close'].iloc[i] < df['low'].iloc[i-1]:
                 displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
-                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns else True
+                vol_spike = df['volume_ratio'].iloc[i] > 1.5 if 'volume_ratio' in df.columns and pd.notna(df['volume_ratio'].iloc[i]) else True
                 strength = 2 if (displacement and vol_spike) else 1
                 bearish_blocks.append({
                     'index': i-1, 'high': df['high'].iloc[i-1],
@@ -409,10 +424,7 @@ def detect_candlestick_pattern(df):
 # ========== PIVOT SR ==========
 def get_pivot_sr(df, lookback=20):
     if df.empty or len(df) < lookback+5:
-        last = df.iloc[-1] if not df.empty else None
-        if last is not None:
-            return last.get('support',0), last.get('resistance',0), 0, 0, 0, 0, 0, 0, 0
-        return 0,0,0,0,0,0,0,0,0
+        return 0, 0, 0, 0, 0, 0, 0, 0, 0
     last = df.iloc[-1]
     pivot = (last['high'] + last['low'] + last['close'])/3
     r1 = 2*pivot - last['low']
@@ -773,41 +785,3 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
         "sharpe_ratio": round(sharpe, 2), "expectancy": round(expectancy, 2),
         "equity_curve": equity[-100:]
     }
-
-# ========== SCANNER ==========
-def scan_saham():
-    try:
-        from scanner_engine import scan_saham_fast
-        return scan_saham_fast()
-    except ImportError:
-        stocks = [
-            "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
-            "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
-            "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
-            "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
-            "MDKA.JK", "ADRO.JK", "ANTM.JK", "AKRA.JK",
-            "BRIS.JK", "INCO.JK", "ITMG.JK", "JPFA.JK",
-            "MAPI.JK", "MEDC.JK", "PGAS.JK", "TOWR.JK",
-            "EXCL.JK", "ISAT.JK", "AMMN.JK", "BYAN.JK",
-            "TPIA.JK", "DSSA.JK", "CUAN.JK", "ADMR.JK",
-            "AADI.JK", "PGEO.JK", "BRPT.JK", "ESSA.JK",
-        ]
-        results = []
-        for stock in stocks:
-            try:
-                df = get_data(stock, "1d")
-                if not df.empty and len(df) > 30:
-                    df = add_indicators(df)
-                    setup, quality, msg = detect_high_quality_setup(df)
-                    if quality >= 60:
-                        signal = "🔥 BUY" if "BUY" in setup else "⏸️ HOLD"
-                        results.append({
-                            "Kode": stock, "Score": f"{quality:.0f}",
-                            "Setup": msg[:40], "Sinyal": signal,
-                            "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
-                        })
-                time.sleep(0.3)
-            except:
-                continue
-        results.sort(key=lambda x: int(x['Score']), reverse=True)
-        return results[:10]
