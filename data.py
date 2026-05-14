@@ -95,8 +95,21 @@ def get_data(symbol, timeframe="1d"):
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
         
-    except Exception as e:
+     except Exception as e:
         print(f"Error get_data {symbol}: {e}")
+        # Fallback: coba ambil dari database jika Yahoo gagal
+        try:
+            from database import load_data as db_load
+            df = db_load(symbol)
+            if not df.empty:
+                df = df.reset_index()
+                df.columns = [col.lower() for col in df.columns]
+                if 'datetime' not in df.columns and 'date' in df.columns:
+                    df.rename(columns={'date': 'datetime'}, inplace=True)
+                print(f"⚠️ Menggunakan data database untuk {symbol}")
+                return df
+        except:
+            pass
         return pd.DataFrame()
 # ========== INDIKATOR (pakai library ta) ==========
 def add_indicators(df):
