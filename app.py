@@ -168,6 +168,7 @@ with tab1:
     # ========== MARKET CONTEXT PANEL (BARU) ==========
     st.subheader("🌐 Market Context")
     try:
+           from context import get_full_market_context
         context = get_full_market_context(symbol_input)
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1:
