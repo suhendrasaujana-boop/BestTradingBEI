@@ -321,7 +321,18 @@ with tab4:
             st.dataframe(pd.DataFrame(results), width='stretch')
         else:
             st.info("Tidak ada sinyal kuat saat ini.")
-
+# Di dalam with tab4:
+    st.divider()
+    st.subheader("🔔 Tes Notifikasi Telegram")
+    if st.button("Tes Kirim Notifikasi"):
+        try:
+            from notification import send_telegram_message
+            import asyncio
+            test_msg = f"✅ Tes notifikasi Smart Money Engine berhasil!\nWaktu: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            asyncio.run(send_telegram_message(test_msg))
+            st.success("Pesan tes terkirim. Cek Telegram Anda.")
+        except Exception as e:
+            st.error(f"Gagal mengirim: {e}")
 # ===================== TAB 5: BACKTEST (UPGRADED) =====================
 with tab5:
     st.header("📈 Backtest Profesional")
