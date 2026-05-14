@@ -9,7 +9,75 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ========== CACHE & RATE LIMIT ==========
-_data_cache = {}
+_data_cache = {}def add_indicators(df):
+    if df.empty or len(df) < 2:
+        return df
+    df = df.copy()
+    
+    # EMA
+    df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
+    df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
+    df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+    df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
+    
+    # RSI
+    df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+    
+    # MACD
+    df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
+    df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    
+    # Volume
+    df['volume_ma20'] = df['volume'].rolling(window=20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_ma20']
+    
+    # ATR
+    df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
+    
+    # ADX
+    df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
+    
+    # Supertrend (implementasi manual karena library 'ta' tidak punya)
+    atr_st = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=10)
+    hl_avg = (df['high'] + df['low']) / 2
+    multiplier = 3.0
+    upper_band = hl_avg + (multiplier * atr_st)
+    lower_band = hl_avg - (multiplier * atr_st)
+    
+    df['supertrend'] = 0.0
+    df['supertrend_direction'] = 1
+    for i in range(1, len(df)):
+        prev_close = df['close'].iloc[i-1]
+        prev_upper = upper_band.iloc[i-1]
+        prev_lower = lower_band.iloc[i-1]
+        curr_upper = upper_band.iloc[i]
+        curr_lower = lower_band.iloc[i]
+        
+        if df['close'].iloc[i] > prev_upper:
+            df.loc[df.index[i], 'supertrend_direction'] = 1
+        elif df['close'].iloc[i] < prev_lower:
+            df.loc[df.index[i], 'supertrend_direction'] = -1
+        else:
+            df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
+        
+        if df['supertrend_direction'].iloc[i] == 1:
+            df.loc[df.index[i], 'supertrend'] = curr_lower
+        else:
+            df.loc[df.index[i], 'supertrend'] = curr_upper
+    
+    # VWAP reset harian
+    if 'datetime' in df.columns:
+        df['date'] = pd.to_datetime(df['datetime']).dt.date
+        df['vwap'] = df.groupby('date').apply(
+            lambda g: (g['volume'] * (g['high'] + g['low'] + g['close']) / 3).cumsum() / g['volume'].cumsum()
+        ).reset_index(level=0, drop=True)
+        df.drop('date', axis=1, inplace=True)
+    else:
+        df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    
+    df = df.ffill().bfill().fillna(0)
+    return df
 _last_request_time = 0
 _MIN_REQUEST_INTERVAL = 1
 
@@ -57,32 +125,59 @@ def add_indicators(df):
     if df.empty or len(df) < 2:
         return df
     df = df.copy()
+    
     # EMA
     df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
     df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
     df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
+    
     # RSI
     df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+    
     # MACD
     df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
     df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
     df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    
     # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
+    
     # ATR
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
+    
     # ADX
     df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
-    # Supertrend
-    st = ta.trend.supertrend(df['high'], df['low'], df['close'], window=10, multiplier=3)
-    if st is not None:
-        df['supertrend'] = st['supertrend']
-        df['supertrend_direction'] = st['supertrend_direction'].map({1: 1, -1: -1})
-    else:
-        df['supertrend'] = 0
-        df['supertrend_direction'] = 0
+    
+    # Supertrend (implementasi manual karena library 'ta' tidak punya)
+    atr_st = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=10)
+    hl_avg = (df['high'] + df['low']) / 2
+    multiplier = 3.0
+    upper_band = hl_avg + (multiplier * atr_st)
+    lower_band = hl_avg - (multiplier * atr_st)
+    
+    df['supertrend'] = 0.0
+    df['supertrend_direction'] = 1
+    for i in range(1, len(df)):
+        prev_close = df['close'].iloc[i-1]
+        prev_upper = upper_band.iloc[i-1]
+        prev_lower = lower_band.iloc[i-1]
+        curr_upper = upper_band.iloc[i]
+        curr_lower = lower_band.iloc[i]
+        
+        if df['close'].iloc[i] > prev_upper:
+            df.loc[df.index[i], 'supertrend_direction'] = 1
+        elif df['close'].iloc[i] < prev_lower:
+            df.loc[df.index[i], 'supertrend_direction'] = -1
+        else:
+            df.loc[df.index[i], 'supertrend_direction'] = df['supertrend_direction'].iloc[i-1]
+        
+        if df['supertrend_direction'].iloc[i] == 1:
+            df.loc[df.index[i], 'supertrend'] = curr_lower
+        else:
+            df.loc[df.index[i], 'supertrend'] = curr_upper
+    
     # VWAP reset harian
     if 'datetime' in df.columns:
         df['date'] = pd.to_datetime(df['datetime']).dt.date
@@ -92,9 +187,9 @@ def add_indicators(df):
         df.drop('date', axis=1, inplace=True)
     else:
         df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+    
     df = df.ffill().bfill().fillna(0)
     return df
-
 # ========== SWING POINTS (no repaint) ==========
 def detect_swing_points(df, lookback=5, confirmation=2):
     if df.empty or len(df) < lookback*2 + confirmation:
