@@ -63,9 +63,16 @@ def get_data(symbol, timeframe="1d"):
             except ImportError:
                 pass  # database.py belum ada, lanjut ke Yahoo
         
-        # Fallback: ambil dari Yahoo Finance
+            # Fallback: ambil dari Yahoo Finance
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
-        period = "7d" if timeframe in ["5m", "15m", "30m", "60m"] else "3mo"
+        
+        # Untuk 1d, kurangi period agar lebih ringan (cukup 7 hari terakhir)
+        if timeframe == "1d":
+            period = "7d"  # dari 3mo jadi 7d saja (lebih cepat)
+        elif timeframe in ["5m", "15m", "30m", "60m"]:
+            period = "7d"
+        else:
+            period = "3mo"
         
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
