@@ -4,7 +4,7 @@ import yfinance as yf
 import time
 from datetime import datetime
 from scipy.signal import argrelextrema
-import pandas_ta as ta
+import ta
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -26,7 +26,6 @@ def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
     
-    # Normalisasi symbol
     symbol = symbol.upper()
     if symbol == "IHSG":
         symbol = "^JKSE"
@@ -41,11 +40,7 @@ def get_data(symbol, timeframe="1d"):
     
     try:
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
-        if timeframe in ["5m", "15m", "30m", "60m"]:
-            period = "7d"
-        else:
-            period = "3mo"
-        
+        period = "7d" if timeframe in ["5m", "15m", "30m", "60m"] else "3mo"
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         if df.empty:
@@ -53,7 +48,6 @@ def get_data(symbol, timeframe="1d"):
         
         df = df.reset_index()
         df.columns = [col.lower() for col in df.columns]
-        # Pastikan ada kolom datetime
         if 'datetime' not in df.columns and 'date' in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
         
@@ -63,52 +57,51 @@ def get_data(symbol, timeframe="1d"):
         print(f"Error get_data {symbol}: {e}")
         return pd.DataFrame()
 
-# ========== INDICATOR ENGINE (pakai pandas-ta) ==========
+# ========== INDIKATOR (pakai library ta) ==========
 def add_indicators(df):
     if df.empty or len(df) < 2:
         return df
     df = df.copy()
     
     # EMA
-    df['ema10'] = ta.ema(df['close'], length=10)
-    df['ema20'] = ta.ema(df['close'], length=20)
-    df['ema50'] = ta.ema(df['close'], length=50)
-    df['ema200'] = ta.ema(df['close'], length=200)
+    df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
+    df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
+    df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
+    df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
     
     # RSI
-    df['rsi'] = ta.rsi(df['close'], length=14)
+    df['rsi'] = ta.momentum.rsi(df['close'], window=14)
     
     # MACD
-    macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
-    df['macd'] = macd['MACD_12_26_9']
-    df['macd_signal'] = macd['MACDs_12_26_9']
-    df['macd_histogram'] = macd['MACDh_12_26_9']
+    macd = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
+    df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
+    df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
     
     # Volume
-    df['volume_ma20'] = ta.sma(df['volume'], length=20)
+    df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
     
     # ATR
-    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+    df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
     
     # ADX
-    adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-    df['adx'] = adx_df['ADX_14']
+    df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
     
-    # Support & Resistance rolling
+    # Support Resistance rolling
     df['support'] = df['low'].rolling(window=20).min()
     df['resistance'] = df['high'].rolling(window=20).max()
     
     # Supertrend
-    st = ta.supertrend(df['high'], df['low'], df['close'], length=10, multiplier=3)
-    if 'SUPERT_10_3.0' in st.columns:
-        df['supertrend'] = st['SUPERT_10_3.0']
-        df['supertrend_direction'] = st['SUPERTd_10_3.0'].map({1: 1, -1: -1})
+    st_indicator = ta.trend.supertrend(df['high'], df['low'], df['close'], window=10, multiplier=3)
+    if st_indicator is not None and 'supertrend' in st_indicator.columns:
+        df['supertrend'] = st_indicator['supertrend']
+        df['supertrend_direction'] = st_indicator['supertrend_direction'].map({1: 1, -1: -1})
     else:
         df['supertrend'] = 0
         df['supertrend_direction'] = 0
     
-    # VWAP dengan reset harian jika ada datetime
+    # VWAP reset harian
     if 'datetime' in df.columns:
         df['date'] = pd.to_datetime(df['datetime']).dt.date
         df['vwap'] = df.groupby('date').apply(
@@ -118,22 +111,18 @@ def add_indicators(df):
     else:
         df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
     
-    # Fill NaN
     df = df.ffill().bfill().fillna(0)
     return df
 
 # ========== SWING POINTS (no repaint) ==========
 def detect_swing_points(df, lookback=5, confirmation=2):
-    """Deteksi swing high/low yang sudah dikonfirmasi (tidak berubah)."""
     if df.empty or len(df) < lookback*2 + confirmation:
         return [], []
     high = df['high'].values
     low = df['low'].values
-    # Hanya indeks yang sudah aman (tidak mungkin berubah)
     safe_end = len(df) - confirmation
     local_high_idx = argrelextrema(high[:safe_end], np.greater, order=lookback)[0]
     local_low_idx = argrelextrema(low[:safe_end], np.less, order=lookback)[0]
-    
     swing_highs = [(int(i), high[i]) for i in local_high_idx]
     swing_lows = [(int(i), low[i]) for i in local_low_idx]
     return swing_highs, swing_lows
@@ -149,27 +138,23 @@ def detect_bos_choch(df):
     last_close = df.iloc[-1]['close']
     h1, h2 = swing_highs[-1], swing_highs[-2]
     l1, l2 = swing_lows[-1], swing_lows[-2]
-    
     result = "NEUTRAL"
     confidence = 0
     signals = []
     
-    # BOS Bullish: higher high dan close di atas high sebelumnya
     if h1[1] > h2[1] and last_close > h2[1]:
         result = "BULLISH_BOS"
         confidence += 40
         signals.append("BOS UP")
-    # BOS Bearish
     elif l1[1] < l2[1] and last_close < l2[1]:
         result = "BEARISH_BOS"
         confidence += 40
         signals.append("BOS DOWN")
     
-    # CHOCH (Change of Character)
     if len(swing_highs) >= 3 and len(swing_lows) >= 3:
         h3 = swing_highs[-3]
         l3 = swing_lows[-3]
-        if h1[1] < h2[1] and l1[1] > l2[1]:  # lower high + higher low
+        if h1[1] < h2[1] and l1[1] > l2[1]:
             if last_close > df.iloc[h1[0]]['close']:
                 result = "BULLISH_CHOCH"
                 confidence += 35
@@ -182,15 +167,13 @@ def detect_bos_choch(df):
     desc = " | ".join(signals) if signals else "No BOS/CHOCH"
     return result, min(100, confidence), desc
 
-# ========== FAIR VALUE GAP (FVG) ==========
+# ========== FVG ==========
 def detect_fair_value_gap(df):
-    """FVG dengan filter displasemen dan volume."""
     fvg_bullish, fvg_bearish = [], []
     if df.empty or len(df) < 3:
         return [], []
     for i in range(2, len(df)):
         vol_ratio = df['volume_ratio'].iloc[i] if 'volume_ratio' in df.columns else 1.0
-        # Bullish FVG
         if df['low'].iloc[i] > df['high'].iloc[i-2]:
             body = abs(df['close'].iloc[i] - df['open'].iloc[i])
             candle_range = df['high'].iloc[i] - df['low'].iloc[i]
@@ -203,7 +186,6 @@ def detect_fair_value_gap(df):
                         'lower': df['high'].iloc[i-2],
                         'strength': vol_ratio
                     })
-        # Bearish FVG
         if df['high'].iloc[i] < df['low'].iloc[i-2]:
             body = abs(df['close'].iloc[i] - df['open'].iloc[i])
             candle_range = df['high'].iloc[i] - df['low'].iloc[i]
@@ -219,7 +201,6 @@ def detect_fair_value_gap(df):
     return fvg_bullish, fvg_bearish
 
 def is_fvg_still_valid(df, fvg, current_idx):
-    """FVG masih ada jika belum disentuh oleh candle sesudahnya."""
     if fvg is None:
         return False
     for i in range(fvg['index']+1, min(current_idx+1, len(df))):
@@ -233,20 +214,17 @@ def get_nearest_fvg(df):
     current_idx = len(df)-1
     valid_bull = [f for f in fvg_bull if is_fvg_still_valid(df, f, current_idx) and f['upper'] > last_close]
     valid_bear = [f for f in fvg_bear if is_fvg_still_valid(df, f, current_idx) and f['lower'] < last_close]
-    
     nearest_bull = min(valid_bull, key=lambda x: x['upper'] - last_close) if valid_bull else None
     nearest_bear = min(valid_bear, key=lambda x: last_close - x['lower']) if valid_bear else None
     return nearest_bull, nearest_bear
 
 # ========== ORDER BLOCK ==========
 def detect_order_blocks(df):
-    """OB dengan validasi displacement dan volume."""
     bullish_blocks, bearish_blocks = [], []
     if df.empty or len(df) < 5:
         return [], []
     for i in range(2, len(df)-1):
         atr_i = df['atr'].iloc[i] if pd.notna(df['atr'].iloc[i]) else df['close'].iloc[i]*0.02
-        # Bullish OB
         if df['close'].iloc[i] > df['open'].iloc[i] and df['close'].iloc[i-1] < df['open'].iloc[i-1]:
             if df['close'].iloc[i] > df['high'].iloc[i-1]:
                 displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
@@ -258,7 +236,6 @@ def detect_order_blocks(df):
                     'low': df['low'].iloc[i-1],
                     'strength': strength
                 })
-        # Bearish OB
         if df['close'].iloc[i] < df['open'].iloc[i] and df['close'].iloc[i-1] > df['open'].iloc[i-1]:
             if df['close'].iloc[i] < df['low'].iloc[i-1]:
                 displacement = (df['high'].iloc[i] - df['low'].iloc[i]) > 1.5 * atr_i
@@ -273,7 +250,6 @@ def detect_order_blocks(df):
     return bullish_blocks, bearish_blocks
 
 def is_ob_still_valid(df, ob, current_idx):
-    """OB valid jika harga belum melewati level sepenuhnya."""
     if ob is None:
         return False
     for i in range(ob['index']+1, min(current_idx+1, len(df))):
@@ -287,17 +263,15 @@ def get_nearest_order_block(df):
     current_idx = len(df)-1
     valid_bull = [ob for ob in bull_ob if is_ob_still_valid(df, ob, current_idx) and ob['high'] > last_close]
     valid_bear = [ob for ob in bear_ob if is_ob_still_valid(df, ob, current_idx) and ob['low'] < last_close]
-    
     nearest_bull = min(valid_bull, key=lambda x: x['high'] - last_close) if valid_bull else None
     nearest_bear = min(valid_bear, key=lambda x: last_close - x['low']) if valid_bear else None
     return nearest_bull, nearest_bear
 
-# ========== MARKET STRUCTURE (gabungan) ==========
+# ========== MARKET STRUCTURE ==========
 def detect_market_structure(df):
     if df.empty or len(df) < 20:
         return "RANGE", 0, "Data tidak cukup"
     bos_cho, conf, desc = detect_bos_choch(df)
-    # Tambahkan liquidity zones sebagai penguat
     liq_highs, liq_lows = detect_liquidity_zones(df)
     signals = [desc]
     if liq_highs:
@@ -330,7 +304,6 @@ def detect_liquidity_sweep(df, lookback=20):
     prev_lows = df['low'].iloc[-lookback:-1]
     resistance = prev_highs.max()
     support = prev_lows.min()
-    
     sweep_type = "NONE"
     confidence = 0
     signals = []
@@ -354,7 +327,6 @@ def detect_market_regime(df):
     atr_pct = (last.get('atr', 0)/last['close']*100) if last['close'] != 0 else 0
     vol_ratio = last.get('volume_ratio', 1) or 1
     ret_20 = (last['close'] - df['close'].iloc[-21])/df['close'].iloc[-21]*100 if len(df)>20 else 0
-    
     if adx > 35 and atr_pct > 3:
         return "STRONG_TRENDING", 85, f"ADX {adx:.0f}, ATR {atr_pct:.1f}%"
     if adx >= 25:
@@ -365,7 +337,7 @@ def detect_market_regime(df):
         return "SIDEWAYS", 40, "Ranging market"
     return "NEUTRAL", 50, "Normal"
 
-# ========== CANDLESTICK PATTERN ==========
+# ========== CANDLESTICK ==========
 def detect_candlestick_pattern(df):
     if df.empty or len(df) < 3:
         return "NONE", 0, "Data tidak cukup"
@@ -375,11 +347,9 @@ def detect_candlestick_pattern(df):
     candle_range = last['high'] - last['low']
     upper_wick = last['high'] - max(last['open'], last['close'])
     lower_wick = min(last['open'], last['close']) - last['low']
-    
     pattern = "NONE"
     conf = 0
     signals = []
-    
     if candle_range > 0:
         if body/candle_range > 0.85:
             if last['close'] > last['open']:
@@ -394,15 +364,12 @@ def detect_candlestick_pattern(df):
         if upper_wick > body*2 and lower_wick < body:
             pattern, conf = "SHOOTING_STAR", -35
             signals.append("Shooting star")
-    
-    # Engulfing
     if last['close'] > last['open'] and prev['close'] < prev['open'] and last['close'] > prev['open'] and last['open'] < prev['close']:
         pattern, conf = "BULLISH_ENGULFING", 40
         signals.append("Bullish engulfing")
     elif last['close'] < last['open'] and prev['close'] > prev['open'] and last['open'] > prev['close'] and last['close'] < prev['open']:
         pattern, conf = "BEARISH_ENGULFING", -40
         signals.append("Bearish engulfing")
-    
     desc = " | ".join(signals) if signals else "No pattern"
     return pattern, conf, desc
 
@@ -428,15 +395,14 @@ def get_pivot_sr(df, lookback=20):
     fib618 = low20 + rng*0.618
     return roll_sup, roll_res, pivot, r1, r2, s1, s2, fib382, fib618
 
-# ========== CONFIDENCE SCORE (kalibrasi ulang) ==========
+# ========== CONFIDENCE SCORE ==========
 def calculate_confidence_score(df, ihsg_score=50):
     if df.empty or len(df) < 30:
         return 50, [], "NORMAL"
     last = df.iloc[-1]
     factors = []
-    total = 50  # netral
+    total = 50
     
-    # 1. Structure (20%)
     structure, struct_conf, struct_desc = detect_market_structure(df)
     if "BULLISH" in structure:
         total += struct_conf * 0.20
@@ -447,7 +413,6 @@ def calculate_confidence_score(df, ihsg_score=50):
     else:
         factors.append(("Structure", 0, "Neutral"))
     
-    # 2. FVG (10%)
     nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
     fvg_score = 0
     if nearest_bull_fvg:
@@ -460,7 +425,6 @@ def calculate_confidence_score(df, ihsg_score=50):
         factors.append(("FVG", fvg_score, "Bearish FVG dekat" if dist<2 else "Bearish FVG"))
     total += fvg_score
     
-    # 3. Order Block (10%)
     nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
     ob_score = 0
     if nearest_bull_ob:
@@ -473,7 +437,6 @@ def calculate_confidence_score(df, ihsg_score=50):
         factors.append(("OrderBlock", ob_score, "Bearish OB near" if dist<2 else "Bearish OB"))
     total += ob_score
     
-    # 4. Trend (10%)
     if last['ema20'] > last['ema50']:
         total += 10
         factors.append(("Trend", 10, "Bullish"))
@@ -481,31 +444,19 @@ def calculate_confidence_score(df, ihsg_score=50):
         total -= 10
         factors.append(("Trend", -10, "Bearish"))
     
-    # 5. Momentum (5%)
-    mom_score = 0
-    if last['macd_histogram'] > 0 and last['rsi'] > 50:
-        mom_score = 5
-    elif last['macd_histogram'] < 0 and last['rsi'] < 50:
-        mom_score = -5
+    mom_score = 5 if last['macd_histogram'] > 0 and last['rsi'] > 50 else (-5 if last['macd_histogram'] < 0 and last['rsi'] < 50 else 0)
     total += mom_score
     factors.append(("Momentum", mom_score, "MACD+RSI"))
     
-    # 6. Volume (10%)
-    vol_score = 0
-    if last['volume_ratio'] >= 1.5:
-        vol_score = 10
-    elif last['volume_ratio'] < 0.6:
-        vol_score = -10
+    vol_score = 10 if last['volume_ratio'] >= 1.5 else (-10 if last['volume_ratio'] < 0.6 else 0)
     total += vol_score
     factors.append(("Volume", vol_score, f"Vol ratio {last['volume_ratio']:.1f}"))
     
-    # 7. ADX/Volatility (5%)
     adx_val = last.get('adx',0) or 0
     adx_score = 5 if adx_val >= 25 else (-5 if adx_val < 20 else 0)
     total += adx_score
     factors.append(("ADX", adx_score, f"ADX {adx_val:.0f}"))
     
-    # 8. Regime (10%)
     regime, regime_conf, _ = detect_market_regime(df)
     if "TRENDING" in regime or "STRONG" in regime:
         total += 10
@@ -516,7 +467,6 @@ def calculate_confidence_score(df, ihsg_score=50):
     else:
         factors.append(("Regime", 0, regime))
     
-    # 9. IHSG (10%)
     market_score = (ihsg_score - 50) * 0.10
     total += market_score
     factors.append(("IHSG", market_score, f"Score {ihsg_score:.0f}"))
@@ -532,26 +482,22 @@ def calculate_confidence_score(df, ihsg_score=50):
         grade = "AVOID"
     return final, factors, grade
 
-# ========== ENTRY, SL, TP (dengan logika baru) ==========
+# ========== ENTRY, SL, TP ==========
 def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     if df.empty or len(df) < 30:
         return None, None, None, 0, 0, "NO_SETUP", 0, []
-    
     last = df.iloc[-1]
     atr = last.get('atr', last['close']*0.02)
     if pd.isna(atr) or atr <= 0:
         atr = last['close'] * 0.02
-    
     structure, struct_conf, struct_desc = detect_market_structure(df)
     smart_money, sm_conf, sm_desc = detect_smart_money_volume(df)
     is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
     pattern, pattern_conf, pattern_desc = detect_candlestick_pattern(df)
     regime, regime_conf, regime_desc = detect_market_regime(df)
     support, resistance, _, _, _, _, _, _, _ = get_pivot_sr(df)
-    
     nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
     nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
-    
     trend_up = last['ema20'] > last['ema50']
     momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
     volume_spike = last['volume_ratio'] >= 1.5
@@ -564,7 +510,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     confidence = 0
     signals = []
     
-    # Prioritas 1: Smart Money Combo (BOS + FVG + OB)
     if "BULLISH" in structure and nearest_bull_fvg and nearest_bull_ob:
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -572,7 +517,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "SMART_MONEY_COMBO_BUY"
         confidence = 85
         signals = [struct_desc, "Bullish FVG", "Bullish OB"]
-    # 2: BULLISH BOS + Volume Spike
     elif "BULLISH" in structure and volume_spike:
         entry_price = last['close']
         stop_loss = entry_price - 2 * atr
@@ -580,7 +524,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "BREAKOUT_BUY"
         confidence = struct_conf
         signals = [struct_desc]
-    # 3: Bullish Candlestick Pattern
     elif pattern in ["BULLISH_ENGULFING", "HAMMER"] and trend_up:
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -588,7 +531,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = f"{pattern}_BUY"
         confidence = 65 + abs(pattern_conf)//2
         signals = [pattern_desc]
-    # 4: Bullish Liquidity Sweep
     elif is_sweep and sweep_type == "BULLISH_SFP":
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -596,7 +538,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "LIQUIDITY_SWEEP_BUY"
         confidence = sweep_conf
         signals = [sweep_desc]
-    # 5: FVG Buy
     elif nearest_bull_fvg and (nearest_bull_fvg['upper'] - last['close']) / last['close'] < 0.02:
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -604,7 +545,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "FVG_BUY"
         confidence = 70
         signals = ["Near FVG"]
-    # 6: Order Block Buy
     elif nearest_bull_ob and (nearest_bull_ob['high'] - last['close']) / last['close'] < 0.02:
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -612,7 +552,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         setup_name = "ORDER_BLOCK_BUY"
         confidence = 70
         signals = ["Near OB"]
-    # 7: Trend Buy
     elif trend_up and strong_trend and momentum_bullish:
         entry_price = last['close']
         stop_loss = entry_price - 2 * atr
@@ -623,16 +562,14 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     else:
         return None, None, None, 0, 0, "NO_SETUP", 0, []
     
-    if entry_price:
-        risk = abs(entry_price - stop_loss)
-        reward = abs(take_profit - entry_price)
-        rr = reward / risk if risk > 0 else 0
-        risk_amount = capital * (risk_percent / 100)
-        shares = int(risk_amount / risk) if risk > 0 else 0
-        max_shares = int((capital * 0.5) / entry_price) if entry_price > 0 else 0
-        shares = min(shares, max_shares)
-        return entry_price, stop_loss, take_profit, shares, rr, setup_name, confidence, signals
-    return None, None, None, 0, 0, "NO_SETUP", 0, []
+    risk = abs(entry_price - stop_loss)
+    reward = abs(take_profit - entry_price)
+    rr = reward / risk if risk > 0 else 0
+    risk_amount = capital * (risk_percent / 100)
+    shares = int(risk_amount / risk) if risk > 0 else 0
+    max_shares = int((capital * 0.5) / entry_price) if entry_price > 0 else 0
+    shares = min(shares, max_shares)
+    return entry_price, stop_loss, take_profit, shares, rr, setup_name, confidence, signals
 
 def detect_high_quality_setup(df):
     entry, sl, tp, shares, rr, setup, conf, signals = calculate_entry_sl_tp(df)
@@ -658,7 +595,7 @@ def get_trading_recommendation(df):
             return f"📊 {setup} - Setup medium, hati-hati"
     return "⛔ NO TRADE ZONE - Hindari entry"
 
-# ========== MULTI TIMEFRAME ALIGNMENT ==========
+# ========== MULTI TIMEFRAME ==========
 def get_multi_timeframe_alignment(symbol, capital=100000000, risk_percent=2):
     timeframes = {"daily": "1d", "hourly": "60m", "fifteen": "15m"}
     results = {}
@@ -723,11 +660,39 @@ def get_ihsg_trend():
     except:
         return "NEUTRAL", 50, "IHSG error"
 
+# ========== SMART MONEY VOLUME ==========
+def detect_smart_money_volume(df):
+    if df.empty or len(df) < 30:
+        return "NEUTRAL", 0, "Data tidak cukup"
+    last = df.iloc[-1]
+    prev_5 = df.iloc[-6:-1]
+    prev_20 = df.iloc[-21:-1]
+    signals = []
+    conf = 0
+    result = "NEUTRAL"
+    price_range = (prev_20['high'].max() - prev_20['low'].min()) / prev_20['close'].mean()
+    vol_increasing = prev_5['volume'].mean() > prev_20['volume'].mean() * 1.2
+    if price_range < 0.03 and vol_increasing:
+        result = "ACCUMULATION"
+        conf += 40
+        signals.append("Akumulasi")
+    if last['volume_ratio'] > 1.5 and abs(last['close'] - prev_20['close'].mean())/prev_20['close'].mean() < 0.02:
+        result = "DISTRIBUTION"
+        conf += 35
+        signals.append("Distribusi")
+    if last['volume_ratio'] > 2.0 and last['close'] < (last['high']+last['low'])/2:
+        conf += 20
+        signals.append("Volume spike jual")
+    if last['volume_ratio'] > 2.0 and last['close'] > (last['high']+last['low'])/2:
+        conf += 20
+        signals.append("Volume spike beli")
+    desc = " | ".join(signals) if signals else "No smart money volume"
+    return result, min(100, conf), desc
+
 # ========== BACKTEST (no lookahead) ==========
 def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0.0015, fee_sell=0.0025, slippage=0.001):
     if df.empty or len(df) < 30:
         return {"return": 0, "winrate": 0, "trades": 0, "final_capital": initial_capital, "max_drawdown": 0, "profit_factor": 0, "sharpe_ratio": 0, "expectancy": 0, "equity_curve": []}
-    
     df_test = df.copy()
     df_test = add_indicators(df_test)
     capital = initial_capital
@@ -739,17 +704,13 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
     entry_price_used = 0
     stop_price = 0
     take_price = 0
-    
-    for i in range(20, len(df_test)-1):  # i hingga ada candle berikutnya
-        # Hitung sinyal hanya berdasarkan data sampai i
+    for i in range(20, len(df_test)-1):
         snapshot = df_test.iloc[:i+1]
         entry, sl, tp, shares, rr, setup, conf, _ = calculate_entry_sl_tp(snapshot, capital, risk_per_trade)
-        # Gunakan open candle i+1 sebagai eksekusi (realistis)
         open_next = df_test.iloc[i+1]['open']
         close_next = df_test.iloc[i+1]['close']
         low_next = df_test.iloc[i+1]['low']
         high_next = df_test.iloc[i+1]['high']
-        
         if entry and "BUY" in setup and position == 0 and shares > 0:
             entry_price_used = open_next * (1 + slippage)
             cost = shares * entry_price_used * (1 + fee_buy)
@@ -759,7 +720,6 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
                 stop_price = sl
                 take_price = tp
         elif position > 0:
-            # Cek SL/TP pada candle berikutnya
             if low_next <= stop_price:
                 exit_p = stop_price * (1 - slippage)
                 capital += position * exit_p * (1 - fee_sell)
@@ -778,12 +738,10 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
             peak = current_eq
         dd = (peak - current_eq) / peak * 100 if peak > 0 else 0
         max_dd = max(max_dd, dd)
-    
     if position > 0:
         last_close = df_test.iloc[-1]['close']
         capital += position * last_close * (1 - fee_sell)
         equity.append(capital)
-    
     win_trades = [t for t in trades if t > 0]
     loss_trades = [t for t in trades if t < 0]
     winrate = len(win_trades)/len(trades)*100 if trades else 0
@@ -794,7 +752,6 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
     returns = np.diff(equity)/equity[:-1]
     sharpe = (np.mean(returns)/np.std(returns)*np.sqrt(252)) if len(returns)>0 and np.std(returns)>0 else 0
     expectancy = np.mean(trades) if trades else 0
-    
     return {
         "return": round(total_return, 2),
         "winrate": round(winrate, 2),
@@ -831,48 +788,3 @@ def scan_saham():
             continue
     results.sort(key=lambda x: int(x['Score']), reverse=True)
     return results[:7]
-
-# Legacy functions tetap dipertahankan untuk kompatibilitas
-def detect_bottom_pattern(df):
-    # (sama seperti sebelumnya)
-    return False, 0, "Not used"
-
-def detect_valid_breakout(df, lookback=20):
-    # (tidak digunakan lagi)
-    return False, "NONE", 0, "", 0
-
-def detect_reversal(df):
-    return "NONE", 0, ""
-
-def detect_smart_money_volume(df):
-    # versi sederhana
-    return "NEUTRAL", 0, ""
-
-# Fungsi tambahan untuk deteksi smart money volume yang lebih baik (dipanggil di calculate_entry_sl_tp)
-def detect_smart_money_volume(df):
-    if df.empty or len(df) < 30:
-        return "NEUTRAL", 0, "Data tidak cukup"
-    last = df.iloc[-1]
-    prev_5 = df.iloc[-6:-1]
-    prev_20 = df.iloc[-21:-1]
-    signals = []
-    conf = 0
-    result = "NEUTRAL"
-    price_range = (prev_20['high'].max() - prev_20['low'].min()) / prev_20['close'].mean()
-    vol_increasing = prev_5['volume'].mean() > prev_20['volume'].mean() * 1.2
-    if price_range < 0.03 and vol_increasing:
-        result = "ACCUMULATION"
-        conf += 40
-        signals.append("Akumulasi")
-    if last['volume_ratio'] > 1.5 and abs(last['close'] - prev_20['close'].mean())/prev_20['close'].mean() < 0.02:
-        result = "DISTRIBUTION"
-        conf += 35
-        signals.append("Distribusi")
-    if last['volume_ratio'] > 2.0 and last['close'] < (last['high']+last['low'])/2:
-        conf += 20
-        signals.append("Volume spike jual")
-    if last['volume_ratio'] > 2.0 and last['close'] > (last['high']+last['low'])/2:
-        conf += 20
-        signals.append("Volume spike beli")
-    desc = " | ".join(signals) if signals else "No smart money volume"
-    return result, min(100, conf), desc
