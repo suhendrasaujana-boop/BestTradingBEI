@@ -25,19 +25,16 @@ def _wait_for_rate_limit():
 def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
-    
     symbol = symbol.upper()
     if symbol == "IHSG":
         symbol = "^JKSE"
     elif symbol != "^JKSE" and not symbol.endswith('.JK'):
         symbol = f"{symbol}.JK"
-    
     cache_key = f"{symbol}_{timeframe}"
     if cache_key in _data_cache:
         cached_time, cached_data = _data_cache[cache_key]
         if (datetime.now() - cached_time).seconds < 60:
             return cached_data.copy()
-    
     try:
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
         period = "7d" if timeframe in ["5m", "15m", "30m", "60m"] else "3mo"
@@ -45,12 +42,10 @@ def get_data(symbol, timeframe="1d"):
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         if df.empty:
             return pd.DataFrame()
-        
         df = df.reset_index()
         df.columns = [col.lower() for col in df.columns]
         if 'datetime' not in df.columns and 'date' in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
-        
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
     except Exception as e:
@@ -62,45 +57,32 @@ def add_indicators(df):
     if df.empty or len(df) < 2:
         return df
     df = df.copy()
-    
     # EMA
     df['ema10'] = ta.trend.ema_indicator(df['close'], window=10)
     df['ema20'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema50'] = ta.trend.ema_indicator(df['close'], window=50)
     df['ema200'] = ta.trend.ema_indicator(df['close'], window=200)
-    
     # RSI
     df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-    
     # MACD
-    macd = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
     df['macd'] = ta.trend.macd(df['close'], window_slow=26, window_fast=12)
     df['macd_signal'] = ta.trend.macd_signal(df['close'], window_slow=26, window_fast=12, window_sign=9)
     df['macd_histogram'] = ta.trend.macd_diff(df['close'], window_slow=26, window_fast=12, window_sign=9)
-    
     # Volume
     df['volume_ma20'] = df['volume'].rolling(window=20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma20']
-    
     # ATR
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
-    
     # ADX
     df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14)
-    
-    # Support Resistance rolling
-    df['support'] = df['low'].rolling(window=20).min()
-    df['resistance'] = df['high'].rolling(window=20).max()
-    
     # Supertrend
-    st_indicator = ta.trend.supertrend(df['high'], df['low'], df['close'], window=10, multiplier=3)
-    if st_indicator is not None and 'supertrend' in st_indicator.columns:
-        df['supertrend'] = st_indicator['supertrend']
-        df['supertrend_direction'] = st_indicator['supertrend_direction'].map({1: 1, -1: -1})
+    st = ta.trend.supertrend(df['high'], df['low'], df['close'], window=10, multiplier=3)
+    if st is not None:
+        df['supertrend'] = st['supertrend']
+        df['supertrend_direction'] = st['supertrend_direction'].map({1: 1, -1: -1})
     else:
         df['supertrend'] = 0
         df['supertrend_direction'] = 0
-    
     # VWAP reset harian
     if 'datetime' in df.columns:
         df['date'] = pd.to_datetime(df['datetime']).dt.date
@@ -110,7 +92,6 @@ def add_indicators(df):
         df.drop('date', axis=1, inplace=True)
     else:
         df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
-    
     df = df.ffill().bfill().fillna(0)
     return df
 
@@ -134,14 +115,12 @@ def detect_bos_choch(df):
     swing_highs, swing_lows = detect_swing_points(df, lookback=5, confirmation=1)
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return "NEUTRAL", 0, "Insufficient swing points"
-    
     last_close = df.iloc[-1]['close']
     h1, h2 = swing_highs[-1], swing_highs[-2]
     l1, l2 = swing_lows[-1], swing_lows[-2]
     result = "NEUTRAL"
     confidence = 0
     signals = []
-    
     if h1[1] > h2[1] and last_close > h2[1]:
         result = "BULLISH_BOS"
         confidence += 40
@@ -150,7 +129,6 @@ def detect_bos_choch(df):
         result = "BEARISH_BOS"
         confidence += 40
         signals.append("BOS DOWN")
-    
     if len(swing_highs) >= 3 and len(swing_lows) >= 3:
         h3 = swing_highs[-3]
         l3 = swing_lows[-3]
@@ -163,7 +141,6 @@ def detect_bos_choch(df):
                 result = "BEARISH_CHOCH"
                 confidence += 35
                 signals.append("CHOCH DOWN")
-    
     desc = " | ".join(signals) if signals else "No BOS/CHOCH"
     return result, min(100, confidence), desc
 
@@ -402,7 +379,6 @@ def calculate_confidence_score(df, ihsg_score=50):
     last = df.iloc[-1]
     factors = []
     total = 50
-    
     structure, struct_conf, struct_desc = detect_market_structure(df)
     if "BULLISH" in structure:
         total += struct_conf * 0.20
@@ -412,7 +388,6 @@ def calculate_confidence_score(df, ihsg_score=50):
         factors.append(("Structure", -struct_conf*0.20, structure))
     else:
         factors.append(("Structure", 0, "Neutral"))
-    
     nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
     fvg_score = 0
     if nearest_bull_fvg:
@@ -424,7 +399,6 @@ def calculate_confidence_score(df, ihsg_score=50):
         fvg_score = -15 if dist < 2 else -5
         factors.append(("FVG", fvg_score, "Bearish FVG dekat" if dist<2 else "Bearish FVG"))
     total += fvg_score
-    
     nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
     ob_score = 0
     if nearest_bull_ob:
@@ -436,27 +410,22 @@ def calculate_confidence_score(df, ihsg_score=50):
         ob_score = -15 if dist < 2 else -5
         factors.append(("OrderBlock", ob_score, "Bearish OB near" if dist<2 else "Bearish OB"))
     total += ob_score
-    
     if last['ema20'] > last['ema50']:
         total += 10
         factors.append(("Trend", 10, "Bullish"))
     else:
         total -= 10
         factors.append(("Trend", -10, "Bearish"))
-    
     mom_score = 5 if last['macd_histogram'] > 0 and last['rsi'] > 50 else (-5 if last['macd_histogram'] < 0 and last['rsi'] < 50 else 0)
     total += mom_score
     factors.append(("Momentum", mom_score, "MACD+RSI"))
-    
     vol_score = 10 if last['volume_ratio'] >= 1.5 else (-10 if last['volume_ratio'] < 0.6 else 0)
     total += vol_score
     factors.append(("Volume", vol_score, f"Vol ratio {last['volume_ratio']:.1f}"))
-    
     adx_val = last.get('adx',0) or 0
     adx_score = 5 if adx_val >= 25 else (-5 if adx_val < 20 else 0)
     total += adx_score
     factors.append(("ADX", adx_score, f"ADX {adx_val:.0f}"))
-    
     regime, regime_conf, _ = detect_market_regime(df)
     if "TRENDING" in regime or "STRONG" in regime:
         total += 10
@@ -466,11 +435,9 @@ def calculate_confidence_score(df, ihsg_score=50):
         factors.append(("Regime", -10, regime))
     else:
         factors.append(("Regime", 0, regime))
-    
     market_score = (ihsg_score - 50) * 0.10
     total += market_score
     factors.append(("IHSG", market_score, f"Score {ihsg_score:.0f}"))
-    
     final = max(0, min(100, total))
     if final >= 80:
         grade = "SNIPER"
@@ -502,14 +469,12 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
     momentum_bullish = last['macd_histogram'] > 0 and last['rsi'] > 50
     volume_spike = last['volume_ratio'] >= 1.5
     strong_trend = last.get('adx', 0) >= 25
-    
     entry_price = None
     stop_loss = None
     take_profit = None
     setup_name = "NO_SETUP"
     confidence = 0
     signals = []
-    
     if "BULLISH" in structure and nearest_bull_fvg and nearest_bull_ob:
         entry_price = last['close']
         stop_loss = entry_price - 1.5 * atr
@@ -561,7 +526,6 @@ def calculate_entry_sl_tp(df, capital=100000000, risk_percent=2):
         signals = ["Strong uptrend"]
     else:
         return None, None, None, 0, 0, "NO_SETUP", 0, []
-    
     risk = abs(entry_price - stop_loss)
     reward = abs(take_profit - entry_price)
     rr = reward / risk if risk > 0 else 0
