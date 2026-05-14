@@ -292,7 +292,25 @@ with tab3:
         st.write("**Breakdown:**")
         for name, score, note in factors:
             st.write(f"- {name}: {score:+.1f} ({note})")
-
+        # ========== PROBABILITY CONTEXT (FASE 3) ==========
+        st.subheader("🎯 Probability Calibration")
+        try:
+            from probability_engine import get_probability_context
+            prob_ctx = get_probability_context(symbol_input, conf_score)
+            
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                st.metric("Kalibrasi Winrate", f"{prob_ctx['calibrated_winrate']}%", 
+                         delta=f"Grade: {prob_ctx['grade']}")
+            with col_p2:
+                st.metric("Confidence Interval (95%)", prob_ctx['confidence_interval'])
+            with col_p3:
+                st.metric("MTF Confluence", f"{prob_ctx['mtf_confluence']}/100")
+            
+            st.caption("💡 Winrate dikalibrasi dari backtest historis. Confidence interval menunjukkan rentang ketidakpastian.")
+        except Exception as e:
+            st.warning(f"Probability engine gagal: {e}")
+        # ========== END PROBABILITY CONTEXT ==========
 # ===================== TAB 4: SCANNER =====================
 with tab4:
     st.header("🔍 Market Scanner")
