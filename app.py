@@ -18,7 +18,6 @@ def check_password():
     """Autentikasi sederhana, gunakan Streamlit secrets untuk production."""
     correct_password = os.getenv("APP_PASSWORD", st.secrets.get("APP_PASSWORD", None))
     if not correct_password:
-        # fallback hanya untuk development, jangan hardcode di production
         correct_password = "dev123"
         st.sidebar.warning("⚠️  Gunakan environment variable APP_PASSWORD atau Streamlit secrets!")
 
@@ -63,6 +62,12 @@ from data import (
     backtest_strategy
 )
 
+# ===================== IMPORT MARKET CONTEXT =====================
+from context import get_full_market_context, relative_strength_vs_ihsg, get_market_breadth
+
+# ===================== IMPORT BACKTEST ENGINE =====================
+from backtest_engine import run_full_backtest, walk_forward_backtest, monte_carlo_simulation
+
 # ===================== SIDEBAR =====================
 with st.sidebar:
     st.title("⚙️ Konfigurasi")
@@ -71,7 +76,7 @@ with st.sidebar:
     modal = st.number_input("Modal (Rp)", value=100_000_000, step=10_000_000, format="%d")
     risk_pct = st.slider("Risiko per trade (%)", 0.5, 5.0, 2.0, 0.5)
     st.divider()
-    st.caption("Smart Money Trading Engine v2.0")
+    st.caption("Smart Money Trading Engine v3.0")
     st.caption("Data dari Yahoo Finance (delay 15m)")
 
 # ===================== MAIN TABS =====================
@@ -95,11 +100,9 @@ def plot_smart_money_chart(df):
     """Candlestick interaktif dengan FVG, OB, dan swing points."""
     if df.empty or len(df) < 30:
         return None
-    # Ambil 100 candle terakhir agar tidak terlalu berat
     df_plot = df.iloc[-100:].copy()
     fig = go.Figure()
     
-    # Candlestick
     fig.add_trace(go.Candlestick(
         x=df_plot.index if 'datetime' not in df_plot.columns else df_plot['datetime'],
         open=df_plot['open'],
@@ -110,12 +113,6 @@ def plot_smart_money_chart(df):
         increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
     ))
     
-    # Tambahkan FVG zones (bullish = hijau, bearish = merah)
-    fvg_bull, fvg_bear = get_nearest_fvg(df), (None, None)  # dapatkan FVG terdekat
-    # Ambil semua FVG yang masih valid untuk plotting (kita tidak punya fungsi list lengkap, tapi bisa kita ulangi)
-    # Agar tidak terlalu kompleks, kita plot hanya FVG yang menjadi target terdekat
-    last_close = df.iloc[-1]['close']
-    # Plot FVG terdekat (jika ada)
     nearest_bull, nearest_bear = get_nearest_fvg(df)
     if nearest_bull:
         fig.add_hrect(y0=nearest_bull['lower'], y1=nearest_bull['upper'],
@@ -126,7 +123,6 @@ def plot_smart_money_chart(df):
                       fillcolor="rgba(255,0,0,0.2)", line_width=0,
                       annotation_text="Bearish FVG", annotation_position="top left")
     
-    # Plot Order Block terdekat (jika ada)
     nearest_ob_bull, nearest_ob_bear = get_nearest_order_block(df)
     if nearest_ob_bull:
         fig.add_hrect(y0=nearest_ob_bull['low'], y1=nearest_ob_bull['high'],
@@ -137,8 +133,6 @@ def plot_smart_money_chart(df):
                       fillcolor="rgba(200,0,200,0.2)", line_width=1, line_dash="dash",
                       annotation_text="Bearish OB", annotation_position="bottom left")
     
-    # Plot swing points (BOS/CHOCH) – gunakan swing terdeteksi
-    # Kita ambil data swing dari fungsi detect_swing_points
     from data import detect_swing_points
     swing_highs, swing_lows = detect_swing_points(df, lookback=5, confirmation=1)
     if swing_highs:
@@ -169,13 +163,38 @@ with tab1:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # IHSG info
         ihsg_trend, ihsg_score, ihsg_msg = get_ihsg_trend()
         st.metric("IHSG", ihsg_trend, delta=ihsg_msg)
     with col2:
         st.write("**Saham Dipilih:**", symbol_input)
         st.write("**Timeframe:**", timeframe)
     
+    # ========== MARKET CONTEXT PANEL (BARU) ==========
+    st.subheader("🌐 Market Context")
+    try:
+        context = get_full_market_context(symbol_input)
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.metric("RS Rating", f"{context['rs_score']:.0f}", delta=context['rs_desc'])
+        with col_m2:
+            st.metric("Breadth EMA20", f"{context['breadth_20']}%")
+        with col_m3:
+            st.metric("Sektor", context['sector'])
+        with col_m4:
+            st.metric("Foreign Flow", context['flow'], delta=context['flow_desc'])
+        
+        st.progress(context['breadth_20'] / 100, text=f"Breadth EMA20: {context['breadth_desc']}")
+        
+        with st.expander("📊 Performa Sektor (1 Bulan)"):
+            sector_df = pd.DataFrame(
+                list(context['sector_performance'].items()),
+                columns=["Sektor", "Return (%)"]
+            )
+            st.dataframe(sector_df, width='stretch')
+    except Exception as e:
+        st.warning(f"Market context gagal dimuat: {e}")
+    # ========== END MARKET CONTEXT ==========
+
     df, error = load_data(symbol_input, timeframe)
     if error:
         st.error(f"❌ Gagal memuat data: {error}")
@@ -185,14 +204,12 @@ with tab1:
         st.stop()
     
     last = df.iloc[-1]
-    # Key metrics
     colA, colB, colC, colD = st.columns(4)
     colA.metric("Close", f"Rp{last['close']:,.0f}")
     colB.metric("RSI", f"{last['rsi']:.1f}")
     colC.metric("ADX", f"{last['adx']:.1f}" if pd.notna(last['adx']) else "N/A")
     colD.metric("Volume Ratio", f"{last['volume_ratio']:.2f}x")
     
-    # Market Regime
     regime, reg_conf, reg_desc = detect_market_regime(df)
     st.info(f"**Market Regime:** {regime} (confidence: {reg_conf}) – {reg_desc}")
 
@@ -202,15 +219,13 @@ with tab2:
     if df is None:
         st.warning("Data belum dimuat. Silakan kembali ke tab Overview.")
     else:
-        # Chart interaktif
         st.subheader("Price Action & Smart Money Zones")
         fig = plot_smart_money_chart(df)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("Chart tidak dapat ditampilkan karena data kurang.")
         
-        # Detail SMC
         col1, col2 = st.columns(2)
         with col1:
             structure, struct_conf, struct_desc = detect_market_structure(df)
@@ -218,7 +233,6 @@ with tab2:
             st.metric("Market Structure", structure, delta=f"Conf: {struct_conf}")
             st.caption(f"BOS/CHOCH: {bos_cho} ({bos_desc})")
             
-            # FVG
             nearest_bull_fvg, nearest_bear_fvg = get_nearest_fvg(df)
             if nearest_bull_fvg:
                 st.success(f"✅ Bullish FVG terdekat di {nearest_bull_fvg['upper']:.2f} - {nearest_bull_fvg['lower']:.2f}")
@@ -231,7 +245,6 @@ with tab2:
             regime, reg_conf, reg_desc = detect_market_regime(df)
             st.metric("Market Regime", regime, delta=f"Conf: {reg_conf}")
             
-            # Order Block
             nearest_bull_ob, nearest_bear_ob = get_nearest_order_block(df)
             if nearest_bull_ob:
                 st.success(f"✅ Bullish OB di {nearest_bull_ob['high']:.2f} - {nearest_bull_ob['low']:.2f}")
@@ -240,7 +253,6 @@ with tab2:
             else:
                 st.info("Tidak ada Order Block")
         
-        # Liquidity Sweep
         is_sweep, sweep_conf, sweep_type, sweep_desc = detect_liquidity_sweep(df)
         if is_sweep:
             st.warning(f"⚡ Liquidity Sweep terdeteksi: {sweep_type} ({sweep_desc})")
@@ -266,7 +278,6 @@ with tab3:
         else:
             st.warning("Tidak ada setup valid saat ini.")
         
-        # Detail support resistance
         support, resistance, pivot, r1, r2, s1, s2, fib382, fib618 = get_pivot_sr(df)
         st.subheader("Support & Resistance")
         cols = st.columns(4)
@@ -275,7 +286,6 @@ with tab3:
         cols[2].metric("Pivot", f"Rp{pivot:,.0f}")
         cols[3].metric("Fib 38.2%", f"Rp{fib382:,.0f}")
         
-        # Confidence score
         conf_score, factors, grade = calculate_confidence_score(df, ihsg_score)
         st.subheader(f"Confidence Score: {conf_score:.0f} ({grade})")
         st.progress(conf_score/100)
@@ -290,30 +300,74 @@ with tab4:
         with st.spinner("Scanning saham-saham... (mohon tunggu)"):
             results = scan_saham()
         if results:
-            st.dataframe(pd.DataFrame(results), use_container_width=True)
+            st.dataframe(pd.DataFrame(results), width='stretch')
         else:
             st.info("Tidak ada sinyal kuat saat ini.")
 
-# ===================== TAB 5: BACKTEST =====================
+# ===================== TAB 5: BACKTEST (UPGRADED) =====================
 with tab5:
-    st.header("📈 Backtest Strategi")
+    st.header("📈 Backtest Profesional")
     if df is None:
         st.warning("Data belum dimuat.")
     else:
+        bt_mode = st.radio("Mode Backtest", ["Standar", "Walk-Forward", "Monte Carlo"], horizontal=True)
+        
         if st.button("Jalankan Backtest"):
             with st.spinner("Memproses..."):
-                bt = backtest_strategy(df, modal, risk_pct)
-            st.success(f"Backtest selesai. Total trades: {bt['trades']}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Return", f"{bt['return']}%", delta=f"Rp{bt['final_capital']-modal:,.0f}")
-            col2.metric("Win Rate", f"{bt['winrate']}%")
-            col3.metric("Max Drawdown", f"{bt['max_drawdown']}%")
-            col4, col5, col6 = st.columns(3)
-            col4.metric("Profit Factor", f"{bt['profit_factor']:.2f}")
-            col5.metric("Sharpe Ratio", f"{bt['sharpe_ratio']:.2f}")
-            col6.metric("Expectancy", f"{bt['expectancy']:.2f}%")
-            
-            # Equity curve
-            if bt['equity_curve']:
-                eq_df = pd.DataFrame({'Equity': bt['equity_curve']})
-                st.line_chart(eq_df)
+                if bt_mode == "Standar":
+                    bt = backtest_strategy(df, modal, risk_pct)
+                    # Tambahkan metrik lanjutan dari backtest_engine
+                    from backtest_engine import calculate_advanced_metrics
+                    advanced = calculate_advanced_metrics(bt['equity_curve'], [], modal)
+                    bt.update(advanced)
+                    
+                    st.success(f"Backtest selesai. Total trades: {bt['trades']}")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Return", f"{bt['return']}%", delta=f"Rp{bt['final_capital']-modal:,.0f}")
+                    col2.metric("Win Rate", f"{bt['winrate']}%")
+                    col3.metric("Max Drawdown", f"{bt['max_drawdown']}%")
+                    
+                    col4, col5, col6 = st.columns(3)
+                    col4.metric("Profit Factor", f"{bt.get('profit_factor', 0):.2f}")
+                    col5.metric("Sharpe Ratio", f"{bt.get('sharpe_ratio', 0):.2f}")
+                    col6.metric("Expectancy", f"{bt.get('expectancy', 0):.2f}%")
+                    
+                    if bt['equity_curve']:
+                        eq_df = pd.DataFrame({'Equity': bt['equity_curve']})
+                        st.line_chart(eq_df)
+                
+                elif bt_mode == "Walk-Forward":
+                    wf_result, wf_error = walk_forward_backtest(symbol_input, 1, 3, modal, risk_pct)
+                    if wf_error:
+                        st.error(wf_error)
+                    else:
+                        st.success("Walk-Forward Analysis selesai")
+                        st.metric("Rata-rata Return per Periode", f"{wf_result['avg_return']}%")
+                        st.metric("Rata-rata Win Rate", f"{wf_result['avg_winrate']}%")
+                        st.write("**Detail per Periode:**")
+                        st.dataframe(pd.DataFrame(wf_result['periods']), width='stretch')
+                
+                else:  # Monte Carlo
+                    # Ambil trades dari backtest standar dulu
+                    bt_std = backtest_strategy(df, modal, risk_pct)
+                    # Untuk Monte Carlo kita butuh daftar trade % return
+                    # Sayangnya backtest_strategy tidak mengembalikan trades_list
+                    # Kita bisa generate dari equity curve
+                    if len(bt_std['equity_curve']) > 1:
+                        eq = bt_std['equity_curve']
+                        trade_returns = list(np.diff(eq) / eq[:-1] * 100)
+                        mc_result = monte_carlo_simulation(trade_returns, 1000, modal)
+                        if mc_result:
+                            st.success("Monte Carlo Simulation (1000 simulasi)")
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric("Median Return", f"{mc_result['median_return']}%")
+                            col2.metric("Worst Return", f"{mc_result['worst_return']}%")
+                            col3.metric("Best Return", f"{mc_result['best_return']}%")
+                            col4, col5 = st.columns(2)
+                            col4.metric("Median Drawdown", f"{mc_result['median_drawdown']}%")
+                            col5.metric("Worst Drawdown", f"{mc_result['worst_drawdown']}%")
+                            st.caption(f"Value at Risk (95% confidence): Rp{mc_result['var_95']:,.0f}")
+                        else:
+                            st.warning("Data trade tidak cukup untuk Monte Carlo.")
+                    else:
+                        st.warning("Data equity curve tidak cukup.")
