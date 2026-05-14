@@ -8,6 +8,27 @@ from data import get_data, add_indicators, detect_high_quality_setup
 
 CACHE_DIR = "cache"
 
+# ========== GET ALL BEI TICKERS ==========
+def _get_all_bei_tickers():
+    """Ambil SEMUA kode saham BEI dari beisfinder."""
+    try:
+        from beisfinder import get_stock_list
+        tickers = get_stock_list()
+        print(f"📋 {len(tickers)} emiten terdaftar di BEI")
+        return tickers
+    except ImportError:
+        print("⚠️ beisfinder tidak terinstall, pakai daftar default")
+        return [
+            "BBCA", "BBRI", "BMRI", "BBNI", "BRIS",
+            "TLKM", "ASII", "UNTR", "ICBP", "INDF",
+            "KLBF", "SMGR", "CTRA", "SMRA", "PTBA",
+            "CPIN", "GOTO", "MDKA", "ADRO", "ANTM",
+            "AKRA", "INCO", "ITMG", "JPFA", "MAPI",
+            "MEDC", "PGAS", "TOWR", "EXCL", "ISAT",
+            "AMMN", "BYAN", "TPIA", "DSSA", "CUAN",
+            "ADMR", "AADI", "PGEO", "BRPT", "ESSA",
+        ]
+
 def _ensure_cache_dir():
     """Buat folder cache jika belum ada."""
     if not os.path.exists(CACHE_DIR):
@@ -44,10 +65,7 @@ def _save_cache(data):
         print(f"⚠️ Gagal simpan cache: {e}")
 
 def _fetch_single(symbol):
-    """
-    Ambil data satu saham.
-    Return (symbol, df) atau None jika gagal.
-    """
+    """Ambil data satu saham. Return (symbol, df) atau None jika gagal."""
     try:
         df = get_data(symbol, "1d")
         if df is None or df.empty or len(df) < 30:
@@ -59,11 +77,7 @@ def _fetch_single(symbol):
         return None
 
 def _fetch_all_parallel(symbols, max_workers=5, timeout=15):
-    """
-    Ambil semua saham secara paralel.
-    max_workers=5 agar tidak kena rate limit Yahoo Finance.
-    timeout=15 detik per saham.
-    """
+    """Ambil semua saham secara paralel."""
     data_dict = {}
     total = len(symbols)
     completed = 0
@@ -85,49 +99,49 @@ def _fetch_all_parallel(symbols, max_workers=5, timeout=15):
                 if result is not None:
                     sym, df = result
                     data_dict[sym] = df
-                else:
-                    print(f"  [{completed}/{total}] {symbol}: Data tidak cukup")
             except Exception as e:
                 print(f"  [{completed}/{total}] {symbol}: Error - {e}")
             
-            # Progress setiap 10 saham
-            if completed % 10 == 0:
+            # Progress setiap 50 saham
+            if completed % 50 == 0:
                 print(f"  Progress: {completed}/{total} ({len(data_dict)} berhasil)")
     
     return data_dict
 
-def scan_saham_fast(symbols=None):
+def scan_saham_fast(symbols=None, max_stocks=None):
     """
-    Scan saham dengan caching.
+    Scan SEMUA saham BEI dengan caching.
+    
+    Parameters:
+    - symbols: list kode saham (default: SEMUA saham BEI)
+    - max_stocks: batasi jumlah saham (None = semua)
+    
     Return list of dict dengan keys: Kode, Score, Setup, Sinyal, Harga.
     """
-    if symbols is None:
-        symbols = [
-            "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
-            "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
-            "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
-            "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
-            "MDKA.JK", "ADRO.JK", "ANTM.JK", "AKRA.JK",
-            "BRIS.JK", "INCO.JK", "ITMG.JK", "JPFA.JK",
-            "MAPI.JK", "MEDC.JK", "PGAS.JK", "TOWR.JK",
-            "EXCL.JK", "ISAT.JK", "AMMN.JK", "BYAN.JK",
-            "TPIA.JK", "DSSA.JK", "CUAN.JK", "ADMR.JK",
-            "AADI.JK", "PGEO.JK", "BRPT.JK", "ESSA.JK",
-        ]
-    
     start = time.time()
+    
+    # Ambil SEMUA ticker BEI
+    if symbols is None:
+        all_tickers = _get_all_bei_tickers()
+        symbols = [f"{t}.JK" for t in all_tickers]
+    
+    # Batasi jumlah jika perlu
+    if max_stocks:
+        symbols = symbols[:max_stocks]
+    
+    print(f"📊 Total saham yang akan di-scan: {len(symbols)}")
     
     # Cek cache dulu
     data_dict = _load_cache()
     
-    if data_dict is None or len(data_dict) < 30:
+    if data_dict is None or len(data_dict) < len(symbols) * 0.8:
         print("📡 Cache tidak tersedia, fetching data dari Yahoo Finance...")
         data_dict = _fetch_all_parallel(symbols, max_workers=5, timeout=15)
         
         if len(data_dict) >= 30:
             _save_cache(data_dict)
         else:
-            print(f"⚠️ Hanya {len(data_dict)} saham berhasil di-fetch (minimal 30 untuk cache)")
+            print(f"⚠️ Hanya {len(data_dict)} saham berhasil di-fetch")
     else:
         print("✅ Menggunakan data dari cache")
     
@@ -156,15 +170,15 @@ def scan_saham_fast(symbols=None):
     elapsed = time.time() - start
     print(f"\n✅ Scanner selesai dalam {elapsed:.1f} detik. {len(results)} sinyal ditemukan.")
     
-    return results[:10] if len(results) >= 10 else results
+    return results[:20] if len(results) >= 20 else results
 
 
-# Untuk testing mandiri
 if __name__ == "__main__":
     print("=" * 60)
-    print("🧪 TEST SCANNER ENGINE")
+    print("🧪 TEST SCANNER ENGINE - SEMUA EMITEN BEI")
     print("=" * 60)
     
+    # Scan SEMUA saham
     results = scan_saham_fast()
     
     if results:
