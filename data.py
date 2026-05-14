@@ -758,45 +758,48 @@ def backtest_strategy(df, initial_capital=100000000, risk_per_trade=2, fee_buy=0
 
 # ========== SCANNER ==========
 def scan_saham():
-    # 40 saham prioritas tinggi: MSCI + LQ45 likuid + Energi/Metal
-    stocks = [
-        # LEVEL 1: MSCI Global Standard (17 saham)
-        "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
-        "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
-        "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
-        "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
-        "MDKA.JK",
-        # LEVEL 2: LQ45 Likuid Lainnya (13 saham)
-        "ADRO.JK", "ANTM.JK", "AKRA.JK", "BRIS.JK",
-        "INCO.JK", "ITMG.JK", "JPFA.JK", "MAPI.JK",
-        "MEDC.JK", "PGAS.JK", "TOWR.JK", "EXCL.JK",
-        "ISAT.JK",
-        # LEVEL 3: Energi & Metal (10 saham)
-        "AMMN.JK", "BYAN.JK", "TPIA.JK", "DSSA.JK",
-        "CUAN.JK", "ADMR.JK", "AADI.JK", "PGEO.JK",
-        "BRPT.JK", "ESSA.JK",
-    ]
-    
-    results = []
-    for stock in stocks:
-        try:
-            df = get_data(stock, "1d")
-            if not df.empty and len(df) > 30:
-                df = add_indicators(df)
-                setup, quality, msg = detect_high_quality_setup(df)
-                if quality >= 60:
-                    signal = "🔥 BUY" if "BUY" in setup else "⏸️ HOLD"
-                    results.append({
-                        "Kode": stock,
-                        "Score": f"{quality:.0f}",
-                        "Setup": msg[:40],
-                        "Sinyal": signal,
-                        "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
-                    })
-            time.sleep(0.3)  # kurangi interval agar tidak kena rate limit
-        except:
-            continue
-    
-    # Urutkan dari score tertinggi
-    results.sort(key=lambda x: int(x['Score']), reverse=True)
-    return results[:10]  # tampilkan maksimal 10 sinyal terbaik
+    try:
+        from scanner_engine import scan_saham_fast
+        return scan_saham_fast()
+    except ImportError:
+        # Fallback ke cara lama jika scanner_engine.py tidak ditemukan
+        stocks = [
+            # LEVEL 1: MSCI Global Standard (17 saham)
+            "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK",
+            "TLKM.JK", "ASII.JK", "UNTR.JK", "ICBP.JK",
+            "INDF.JK", "KLBF.JK", "SMGR.JK", "CTRA.JK",
+            "SMRA.JK", "PTBA.JK", "CPIN.JK", "GOTO.JK",
+            "MDKA.JK",
+            # LEVEL 2: LQ45 Likuid Lainnya (13 saham)
+            "ADRO.JK", "ANTM.JK", "AKRA.JK", "BRIS.JK",
+            "INCO.JK", "ITMG.JK", "JPFA.JK", "MAPI.JK",
+            "MEDC.JK", "PGAS.JK", "TOWR.JK", "EXCL.JK",
+            "ISAT.JK",
+            # LEVEL 3: Energi & Metal (10 saham)
+            "AMMN.JK", "BYAN.JK", "TPIA.JK", "DSSA.JK",
+            "CUAN.JK", "ADMR.JK", "AADI.JK", "PGEO.JK",
+            "BRPT.JK", "ESSA.JK",
+        ]
+        
+        results = []
+        for stock in stocks:
+            try:
+                df = get_data(stock, "1d")
+                if not df.empty and len(df) > 30:
+                    df = add_indicators(df)
+                    setup, quality, msg = detect_high_quality_setup(df)
+                    if quality >= 60:
+                        signal = "🔥 BUY" if "BUY" in setup else "⏸️ HOLD"
+                        results.append({
+                            "Kode": stock,
+                            "Score": f"{quality:.0f}",
+                            "Setup": msg[:40],
+                            "Sinyal": signal,
+                            "Harga": f"Rp{df.iloc[-1]['close']:,.0f}"
+                        })
+                time.sleep(0.3)
+            except:
+                continue
+        
+        results.sort(key=lambda x: int(x['Score']), reverse=True)
+        return results[:10]
