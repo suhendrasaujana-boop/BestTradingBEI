@@ -25,16 +25,19 @@ def _wait_for_rate_limit():
 def get_data(symbol, timeframe="1d"):
     global _data_cache
     _wait_for_rate_limit()
+    
     symbol = symbol.upper()
     if symbol == "IHSG":
         symbol = "^JKSE"
     elif symbol != "^JKSE" and not symbol.endswith('.JK'):
         symbol = f"{symbol}.JK"
+    
     cache_key = f"{symbol}_{timeframe}"
     if cache_key in _data_cache:
         cached_time, cached_data = _data_cache[cache_key]
         if (datetime.now() - cached_time).seconds < 60:
             return cached_data.copy()
+    
     try:
         interval_map = {"5m": "5m", "15m": "15m", "30m": "30m", "60m": "60m", "1d": "1d"}
         period = "7d" if timeframe in ["5m", "15m", "30m", "60m"] else "3mo"
@@ -42,16 +45,17 @@ def get_data(symbol, timeframe="1d"):
         df = ticker.history(period=period, interval=interval_map.get(timeframe, "1d"))
         if df.empty:
             return pd.DataFrame()
+        
         df = df.reset_index()
         df.columns = [col.lower() for col in df.columns]
         if 'datetime' not in df.columns and 'date' in df.columns:
             df.rename(columns={'date': 'datetime'}, inplace=True)
+        
         _data_cache[cache_key] = (datetime.now(), df.copy())
         return df
     except Exception as e:
         print(f"Error get_data {symbol}: {e}")
         return pd.DataFrame()
-
 # ========== INDIKATOR (pakai library ta) ==========
 def add_indicators(df):
     if df.empty or len(df) < 2:
