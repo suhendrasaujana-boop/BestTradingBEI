@@ -389,3 +389,29 @@ with tab5:
                             st.warning("Data trade tidak cukup untuk Monte Carlo.")
                     else:
                         st.warning("Data equity curve tidak cukup.")
+import threading
+import schedule
+import time
+from notification import scan_and_notify
+
+def run_scheduler():
+    """Menjalankan scheduler dalam thread terpisah."""
+    # Nilai default untuk scanning notifikasi (bisa disesuaikan)
+    modal_default = 100_000_000   # Rp 100 juta
+    risk_default = 2.0            # 2%
+    
+    # Jadwalkan scan setiap 2 jam
+    schedule.every(2).hours.do(
+        scan_and_notify,
+        capital=modal_default,
+        risk_percent=risk_default
+    )
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Jalankan scheduler jika token tersedia
+if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
