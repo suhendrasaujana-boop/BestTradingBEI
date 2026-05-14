@@ -1,6 +1,23 @@
-streamlit
-pandas
-yfinance
-numpy
-matplotlib
-supabase
+# Core Dashboard
+streamlit>=1.35.0
+pandas>=2.2.0
+numpy>=1.26.0
+yfinance>=0.2.40
+
+# Interactive Charts (ganti matplotlib untuk visual utama)
+plotly>=5.22.0
+matplotlib>=3.9.0   # untuk chart tambahan
+
+# Technical Analysis yang lebih valid
+pandas-ta>=0.3.14b
+scipy>=1.13.0
+statsmodels>=0.14.2
+
+# Config & Security (gantikan password hardcode)
+python-dotenv>=1.0.1
+
+# Performance & Caching
+joblib>=1.4.2
+
+# hapus dulu supabase karena belum dipakai
+# supabase>=2.5.0
