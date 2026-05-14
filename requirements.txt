@@ -9,3 +9,5 @@ scipy
 statsmodels
 python-dotenv
 joblib
+schedule
+python-telegram-bot
