@@ -212,7 +212,22 @@ with tab1:
     
     regime, reg_conf, reg_desc = detect_market_regime(df)
     st.info(f"**Market Regime:** {regime} (confidence: {reg_conf}) – {reg_desc}")
-
+    # ========== VOLUME PROFILE INFO ==========
+    try:
+        from volume_profile import volume_profile_analysis
+        vp_analysis = volume_profile_analysis(df, symbol_input)
+        if vp_analysis:
+            st.subheader("📊 Volume Profile")
+            col_v1, col_v2, col_v3 = st.columns(3)
+            with col_v1:
+                st.metric("Point of Control", f"Rp{vp_analysis['poc']:,.0f}")
+            with col_v2:
+                st.metric("Posisi vs POC", f"{vp_analysis['poc_distance_pct']:+.2f}%")
+            with col_v3:
+                st.caption(vp_analysis['poc_position'])
+    except Exception as e:
+        pass
+    # ========== END VOLUME PROFILE INFO ==========
 # ===================== TAB 2: SMART MONEY =====================
 with tab2:
     st.header("🧠 Smart Money Analysis")
